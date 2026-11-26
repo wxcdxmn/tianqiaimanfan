@@ -108,6 +108,13 @@ public/
 - 仅识别出的文字会发给你选择的翻译服务
 - 使用第三方翻译或 LLM 服务时，请自行了解其隐私政策与条款
 
+## 贡献者
+
+| 贡献者 | 角色 |
+| --- | --- |
+| [wxcdxmn](https://github.com/wxcdxmn) | 维护者 —— 韩文支持、排版与翻译链路优化、悬浮控制台、品牌与发布 |
+| [DonutShinobu](https://github.com/DonutShinobu) | 原作者 —— 项目核心引擎与基础架构 |
+
 ## 致谢
 
 - [manga-image-translator](https://github.com/zyddnys/manga-image-translator) —— 漫画翻译流水线的思路来源
