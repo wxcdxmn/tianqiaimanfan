@@ -1,37 +1,32 @@
 import { getExtensionApi } from '../../shared/extensionRuntime';
+import {
+  defaultGenericSiteState,
+  genericSiteHostFromKey,
+  isGenericSiteStorageKey,
+  mergeGenericSiteState,
+  normalizeGenericSiteState,
+  readGenericSiteStateFrom,
+  writeGenericSiteStateTo,
+  type GenericSiteState,
+} from '../../shared/genericSiteState';
 
 /**
  * Per-site opt-in for the generic (RuneManga-style) in-place translation on
  * sites that have no dedicated SiteAdapter.
  *
- * State lives in the extension's local storage so it survives reloads and is
- * shared by every tab without a background round-trip for reads in the common case.
+ * Extension local storage is the single source of truth, so the popup, the
+ * context menu and every tab of the same site observe the same state. This
+ * module owns the in-page cache that keeps reads synchronous for the render
+ * path and notifies subscribers when the state changes anywhere.
  */
 
-export type GenericSiteState = {
-  enabled: boolean;
-  auto: boolean;
-};
-
-const STORAGE_KEY_PREFIX = 'shinobu:generic-site:';
-const DEFAULT_STATE: GenericSiteState = { enabled: false, auto: false };
+export type { GenericSiteState };
 
 let cachedHost: string | null = null;
-let cachedState: GenericSiteState = DEFAULT_STATE;
+let cachedState: GenericSiteState = defaultGenericSiteState;
 const listeners = new Set<() => void>();
-
-export function genericSiteStorageKey(host: string): string {
-  return `${STORAGE_KEY_PREFIX}${host}`;
-}
-
-function normalizeState(value: unknown): GenericSiteState {
-  if (!value || typeof value !== 'object') return DEFAULT_STATE;
-  const record = value as { enabled?: unknown; auto?: unknown };
-  return {
-    enabled: record.enabled === true,
-    auto: record.auto === true,
-  };
-}
+let observingStorage = false;
+let stateRevision = 0;
 
 export function isGenericSiteEnabled(): boolean {
   return cachedState.enabled;
@@ -46,11 +41,16 @@ function notify(): void {
 }
 
 function setCachedState(host: string, state: GenericSiteState): void {
-  if (cachedHost === host && cachedState.enabled === state.enabled && cachedState.auto === state.auto) {
+  if (
+    cachedHost === host
+    && cachedState.enabled === state.enabled
+    && cachedState.auto === state.auto
+  ) {
     return;
   }
   cachedHost = host;
   cachedState = state;
+  stateRevision += 1;
   notify();
 }
 
@@ -59,45 +59,64 @@ export function subscribeGenericSiteState(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export async function readGenericSiteState(host: string): Promise<GenericSiteState> {
-  const local = getExtensionApi()?.storage?.local;
-  const key = genericSiteStorageKey(host);
-  if (!local?.get) return DEFAULT_STATE;
-  const items = await new Promise<Record<string, unknown>>((resolve) => {
-    try {
-      local.get?.(key, resolve);
-    } catch {
-      resolve({});
+/**
+ * Keep the cache in sync when another context (popup, or another tab of the
+ * same site) writes the key, so "enable for this site" applies everywhere
+ * without a reload.
+ */
+function observeStorage(host: string): void {
+  const storage = getExtensionApi()?.storage;
+  if (observingStorage || !storage?.onChanged?.addListener) return;
+  observingStorage = true;
+  storage.onChanged.addListener((changes, areaName) => {
+    if (areaName && areaName !== 'local') return;
+    for (const [key, change] of Object.entries(changes)) {
+      if (!isGenericSiteStorageKey(key)) continue;
+      if (genericSiteHostFromKey(key) !== host) continue;
+      setCachedState(host, normalizeGenericSiteState(change.newValue));
     }
   });
-  return normalizeState(items[key]);
+}
+
+export async function readGenericSiteState(host: string): Promise<GenericSiteState> {
+  return readGenericSiteStateFrom(getExtensionApi(), host);
 }
 
 export async function writeGenericSiteState(host: string, state: GenericSiteState): Promise<void> {
-  const local = getExtensionApi()?.storage?.local;
-  if (!local?.set) return;
-  await new Promise<void>((resolve) => {
-    try {
-      local.set?.({ [genericSiteStorageKey(host)]: state }, resolve);
-    } catch {
-      resolve();
-    }
-  });
+  await writeGenericSiteStateTo(getExtensionApi(), host, state);
 }
 
 /** Load the persisted state for `host` into the in-memory cache. */
 export async function primeGenericSiteState(host: string): Promise<void> {
+  observeStorage(host);
+  const revision = stateRevision;
   const state = await readGenericSiteState(host);
+  // A live change (popup, another tab) may have landed while we were reading.
+  if (stateRevision !== revision) return;
   setCachedState(host, state);
 }
 
-export async function setGenericSiteEnabled(host: string, enabled: boolean): Promise<GenericSiteState> {
-  const next: GenericSiteState = { enabled, auto: enabled ? cachedState.auto : false };
+/** Apply a partial update; turning the site off also clears `auto`. */
+export async function setGenericSiteState(
+  host: string,
+  patch: Partial<GenericSiteState>,
+): Promise<GenericSiteState> {
+  const current = cachedHost === host ? cachedState : await readGenericSiteState(host);
+  const next = mergeGenericSiteState(current, patch);
   await writeGenericSiteState(host, next);
   setCachedState(host, next);
   return next;
 }
 
+export async function setGenericSiteEnabled(host: string, enabled: boolean): Promise<GenericSiteState> {
+  return setGenericSiteState(host, { enabled });
+}
+
+export async function setGenericSiteAuto(host: string, auto: boolean): Promise<GenericSiteState> {
+  return setGenericSiteState(host, { auto });
+}
+
 export async function toggleGenericSite(host: string): Promise<GenericSiteState> {
-  return setGenericSiteEnabled(host, !cachedState.enabled);
+  const current = cachedHost === host ? cachedState : await readGenericSiteState(host);
+  return setGenericSiteEnabled(host, !current.enabled);
 }

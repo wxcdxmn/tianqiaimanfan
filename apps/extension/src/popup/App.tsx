@@ -8,7 +8,7 @@ import {
   type ReactElement,
   type SetStateAction,
 } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Globe } from 'lucide-react';
 import {
   defaultExtensionSettings,
   geminiAppModelOptions,
@@ -50,6 +50,11 @@ import {
   rebaseExtensionSettingsProjection,
   type ExtensionControlClient,
 } from './extensionControlClient';
+import {
+  readSiteControlState,
+  updateSiteControlState,
+  type SiteControlState,
+} from './siteControlClient';
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './components/ui/accordion';
 import { Badge } from './components/ui/badge';
@@ -395,6 +400,8 @@ export function App() {
   const [apiKeyEditVersion, setApiKeyEditVersion] = useState(0);
   const apiKeyValuesRef = useRef<Partial<Record<LlmProvider, string>>>({});
   const apiKeyDirtyRef = useRef<Partial<Record<LlmProvider, boolean>>>({});
+  const [siteState, setSiteState] = useState<SiteControlState | null>(null);
+  const [siteBusy, setSiteBusy] = useState(false);
 
   function getControlClient(): ExtensionControlClient {
     controlClientRef.current ??= createExtensionControlClient();
@@ -480,6 +487,35 @@ export function App() {
     }
     void loadShortcuts();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readSiteControlState()
+      .then((state) => {
+        if (!cancelled) setSiteState(state);
+      })
+      .catch(() => {
+        if (!cancelled) setSiteState(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function updateSite(patch: { enabled?: boolean; auto?: boolean }): Promise<void> {
+    if (siteBusy) return;
+    setSiteBusy(true);
+    try {
+      setSiteState(await updateSiteControlState(patch));
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setSiteBusy(false);
+    }
+  }
 
   function queueSaveStatus(options: SettingsUpdateOptions = {}): void {
     settingsDirtyRef.current = true;
@@ -965,6 +1001,55 @@ export function App() {
             <p className="loading-text">正在读取配置…</p>
           ) : (
             <>
+              <section className="panel site-panel">
+                <Separator className="panel-separator" />
+                <div className="panel-title">
+                  <span className="panel-title-copy">
+                    <Globe />
+                    当前站点
+                  </span>
+                </div>
+                {siteState === null ? (
+                  <p className="site-hint">正在读取当前页面…</p>
+                ) : !siteState.supported ? (
+                  <p className="site-hint">仅支持普通网页（http / https）</p>
+                ) : (
+                  <div className="settings-stack">
+                    <div className="setting-row">
+                      <Label className="field-label">站点</Label>
+                      <span className="site-host" title={siteState.host}>{siteState.host}</span>
+                    </div>
+                    {siteState.builtIn ? (
+                      <p className="site-hint">该站点已有内置适配，通用图片翻译不会启用。</p>
+                    ) : (
+                      <>
+                        <div className="mode-options-switch-row">
+                          <Switch
+                            id="site-image-translate"
+                            checked={siteState.enabled}
+                            disabled={siteBusy}
+                            onCheckedChange={(checked) => void updateSite({ enabled: checked })}
+                          />
+                          <Label htmlFor="site-image-translate">本站图片翻译</Label>
+                        </div>
+                        <div className="mode-options-switch-row">
+                          <Switch
+                            id="site-auto-translate"
+                            checked={siteState.auto}
+                            disabled={siteBusy || !siteState.enabled}
+                            onCheckedChange={(checked) => void updateSite({ auto: checked })}
+                          />
+                          <Label htmlFor="site-auto-translate">自动翻译（跟随滚动）</Label>
+                        </div>
+                        <p className="site-hint">
+                          自动翻译只处理视口附近的页面，滚动时再继续；原始图片会保留，可随时切回。
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </section>
+
               <section className="panel">
                 <Separator className="panel-separator" />
                 <div className="panel-title panel-title-with-shortcuts">

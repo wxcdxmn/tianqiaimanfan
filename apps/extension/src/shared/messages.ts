@@ -139,6 +139,18 @@ export type ToggleGenericSiteMessage = {
   type: 'mt:toggle-generic-site';
 };
 
+/** Sent from the popup to the content script to read the current host's site state. */
+export type GenericSiteStatusMessage = {
+  type: 'mt:generic-site-status';
+};
+
+/** Sent from the popup to the content script to update the current host's site state. */
+export type SetGenericSiteMessage = {
+  type: 'mt:set-generic-site';
+  enabled?: boolean;
+  auto?: boolean;
+};
+
 export type DiagnosticLogEventMessage = {
   type: 'mt:diagnostic-log-event';
   event: DiagnosticLogEvent;
@@ -168,7 +180,9 @@ export type RuntimeMessage =
   | ContextMenuTranslateMessage
   | StartScreenshotTranslateMessage
   | ShortcutTranslateHoverMessage
-  | ToggleGenericSiteMessage;
+  | ToggleGenericSiteMessage
+  | GenericSiteStatusMessage
+  | SetGenericSiteMessage;
 
 export type RuntimeSuccessResponse =
   | {
@@ -243,6 +257,21 @@ export type RuntimeSuccessResponse =
       ok: true;
       type: 'mt:toggle-generic-site';
       enabled: boolean;
+    }
+  | {
+      ok: true;
+      type: 'mt:generic-site-status';
+      host: string;
+      builtIn: boolean;
+      enabled: boolean;
+      auto: boolean;
+    }
+  | {
+      ok: true;
+      type: 'mt:set-generic-site';
+      host: string;
+      enabled: boolean;
+      auto: boolean;
     }
   | {
       ok: true;
@@ -513,6 +542,19 @@ function isDiagnosticLogEventMessage(value: Record<string, unknown>): value is D
   );
 }
 
+function isSetGenericSiteMessage(value: Record<string, unknown>): value is SetGenericSiteMessage {
+  if (value.type !== 'mt:set-generic-site') {
+    return false;
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+    return false;
+  }
+  if (value.auto !== undefined && typeof value.auto !== 'boolean') {
+    return false;
+  }
+  return value.enabled !== undefined || value.auto !== undefined;
+}
+
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!isRecord(value)) {
     return false;
@@ -530,6 +572,8 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'mt:start-screenshot-translate' ||
     type === 'mt:shortcut-translate-hover' ||
     type === 'mt:toggle-generic-site' ||
+    type === 'mt:generic-site-status' ||
+    isSetGenericSiteMessage(value) ||
     isGeminiAppImageTranslateMessage(value) ||
     isGeminiApiImageTranslateMessage(value) ||
     isDiagnosticLogEventMessage(value) ||

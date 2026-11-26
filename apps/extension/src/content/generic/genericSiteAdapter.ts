@@ -6,6 +6,7 @@ import {
   scanGenericImages,
 } from './genericImageScanner';
 import {
+  isGenericSiteAutoEnabled,
   isGenericSiteEnabled,
   primeGenericSiteState,
   subscribeGenericSiteState,
@@ -69,6 +70,11 @@ export function createGenericSiteAdapter(): SiteAdapter {
   return {
     match() {
       return isGenericSiteEnabled();
+    },
+
+    /** Auto mode is per site here, so it can follow the reader's viewport. */
+    isAutoTranslateEnabled() {
+      return isGenericSiteAutoEnabled();
     },
 
     findImages() {

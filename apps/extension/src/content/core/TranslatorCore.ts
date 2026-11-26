@@ -23,6 +23,7 @@ import type { ReaderEngineReadingModeModulePort } from './reading/readerEngineRe
 import { createSiteReadingModeAdapter } from './reading/siteReadingModeAdapter';
 import { ImageLayerEditor } from './editing/imageLayerEditor';
 import { observeContentBooleanPreference } from './contentPreference';
+import { AutoTranslationScheduler, type AutoTaskState } from './auto/autoTranslationScheduler';
 
 type MountedImage = {
   key: string;
@@ -47,6 +48,7 @@ export class TranslatorCore {
   private readonly imageTranslationController: ImageTranslationController;
   private readonly readingModeController: ReadingModeController;
   private readonly readerEngineReadingModeModule: ReaderEngineReadingModeModulePort | null;
+  private readonly autoScheduler: AutoTranslationScheduler;
   private mounted = new Map<string, MountedImage>();
   private disposeObserver: (() => void) | null = null;
   private syncTimer: number | null = null;
@@ -81,6 +83,36 @@ export class TranslatorCore {
           this.imageTranslationExecutionArbiter,
         )
       : null;
+    this.autoScheduler = new AutoTranslationScheduler({
+      translate: (target) => this.imageTranslationController.handleTranslateClick(target),
+      getTaskState: (target) => this.resolveAutoTaskState(target.key),
+    });
+  }
+
+  private resolveAutoTaskState(key: string): AutoTaskState {
+    const state = this.stateStore.get(key);
+    if (!state) return 'idle';
+    if (state.status === 'running') return 'working';
+    if (state.translatedUrl || state.status !== 'idle') return 'done';
+    return 'idle';
+  }
+
+  /**
+   * Auto keeps a viewport-sized window of work instead of submitting the whole
+   * chapter: the page under the reader's eyes lands first and the queue stays
+   * bounded while scrolling.
+   */
+  private syncAutoTranslate(targets: readonly ImageTarget[]): void {
+    if (!this.adapter.match()) {
+      this.autoScheduler.reset();
+      return;
+    }
+    const enabled = this.autoTranslate || this.adapter.isAutoTranslateEnabled?.() === true;
+    if (!enabled) {
+      this.autoScheduler.reset();
+      return;
+    }
+    this.autoScheduler.plan(targets);
   }
 
   stop(): void {
@@ -97,6 +129,7 @@ export class TranslatorCore {
       this.syncTimer = null;
     }
     this.readingModeController.teardown();
+    this.autoScheduler.dispose();
     this.readerEngineReadingModeModule?.dispose();
     this.screenshotController.dispose();
     this.imageTranslationController.dispose();
@@ -235,14 +268,7 @@ export class TranslatorCore {
       editor.sync();
     }
 
-    if (this.autoTranslate && this.adapter.match()) {
-      for (const target of targets) {
-        const state = this.stateStore.get(target.key);
-        if (state?.status === 'idle' && !state.translatedUrl) {
-          void this.imageTranslationController.handleTranslateClick(target);
-        }
-      }
-    }
+    this.syncAutoTranslate(targets);
   }
 
   private renderForKey(key: string): void {

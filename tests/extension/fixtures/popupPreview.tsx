@@ -168,6 +168,19 @@ const api: ExtensionBrowserApi = {
       preview.shortcutOpens += 1;
       return Promise.resolve({ id: 1 });
     },
+    query(_info, callback) {
+      callback([{ id: 1, url: 'https://manga.example/chapter/12' }]);
+    },
+  },
+  storage: {
+    local: {
+      get(_keys, callback) {
+        callback({});
+      },
+      set(_items, callback) {
+        callback();
+      },
+    },
   },
 };
 Object.defineProperty(globalThis, 'chrome', { value: api, configurable: true });
