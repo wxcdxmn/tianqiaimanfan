@@ -1,277 +1,125 @@
-<p align="center">
-  <img src="assets/readme/shinobu-readme-banner-soft.png" alt="ShinobuTranslator - 浏览器中的漫画翻译扩展">
-</p>
-
-<h1 align="center">ShinobuTranslator</h1>
+<h1 align="center">天恰漫翻 Tianqiaimanfan</h1>
 
 <p align="center">
-  在浏览器里直接翻译漫画图片的 Chromium / Firefox 扩展与网页版。
+  一款在浏览器里直接翻译漫画的扩展 —— 选图、出译文，全程本地完成。
 </p>
 
 <p align="center">
-  <a href="https://chromewebstore.google.com/detail/pgehhpbnifjlalmmnpiebkjhphojffef"><img alt="Chrome Web Store" src="https://img.shields.io/badge/Chrome%20Web%20Store-安装-4285F4?style=flat-square"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square"></a>
-  <a href="https://github.com/zyddnys/manga-image-translator"><img alt="基于 manga-image-translator" src="https://img.shields.io/badge/基于-manga--image--translator-green?style=flat-square"></a>
-  <a href="https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx"><img alt="OCR PP-OCRv6 medium" src="https://img.shields.io/badge/OCR-PP--OCRv6%20medium-blue?style=flat-square"></a>
-  <a href="https://huggingface.co/mayocream/aot-inpainting"><img alt="模型 AOT Inpaint" src="https://img.shields.io/badge/模型-AOT%20Inpaint-orange?style=flat-square"></a>
-  <a href="https://huggingface.co/huyvux3005/manga109-segmentation-bubble"><img alt="模型 YOLO11n Bubble" src="https://img.shields.io/badge/模型-YOLO11n%20Bubble-orange?style=flat-square"></a>
+  <a href="#"><img alt="100% 本地推理" src="https://img.shields.io/badge/推理-100%25%20浏览器本地-6366f1?style=flat-square"></a>
+  <a href="#"><img alt="语言" src="https://img.shields.io/badge/日语%20·%20中文%20·%20英语%20·%20韩语-自动识别-10b981?style=flat-square"></a>
 </p>
 
-一款漫画翻译扩展程序，识别/去字等模型仅在浏览器本地运行，无需单独服务器。主要支持日文漫画场景，自动进行识别、翻译、嵌字全流程。同时提供基于Nano Banana的翻译模式，可以利用Gemini订阅对各种类型漫画进行端到端翻译。对于 X / Pixiv / eHentai / GoMuRaw 做了专门适配，其他网站均可使用右键/键盘快捷键进行截图翻译。
+把漫画页面交给它，剩下的不用管：找气泡、认文字、擦掉原文、排上中文译文，一气呵成。检测、识别、去字、排版全部在浏览器端用本地模型跑完，翻译结果经过的只有你选定的翻译服务，没有任何中间服务器。
 
-## 快速开始
+## 它能做什么
 
-### Chrome Web Store
+- **三种翻译方式**：整页一键翻译、悬停即译（`Alt+W`）、框选截图翻译（`Alt+Q`）
+- **四种语言自动识别**：日文 / 简繁中文 / 英文 / 韩文。整页语言门控会采样图片区域自动切换对应的识别模型，韩漫不用手动设置
+- **两条翻译通道，互为兜底**：
+  - 免费通道：Google → Bing → MyMemory 自动降级，请求合并抗限流
+  - LLM 通道：DeepSeek / GLM / Kimi / Gemini / OpenAI / 豆包 / 通义 / MiniMax / 任意 OpenAI 兼容端点，整页合并带上下文翻译，人名和语气前后一致
+  - 免费通道被限流时，已配置 LLM 的用户会被自动补翻，不会留下一堆没翻的气泡
+- **悬浮控制台（HUD）**：检测到可翻译图片时右上角出现可拖动的科技风控制台，一键翻译本页、截图选区翻译、原文/译文整页切换、简洁按钮模式，状态灯实时显示进度
+- **排版讲道理**：横竖排自适应、12px 最小可读字号下限、气泡装不下时允许溢出到空白区域、水印区域识别保护
+- **处理模式**：翻译、仅去字、保留原文重排，按需选择
 
-> 项目版本更新较快，Chrome Web Store 需等待审核，可能落后于最新版本。如需体验最新功能，建议使用下方的手动安装。
+## 安装
 
-[![Chrome Web Store](https://developer.chrome.com/static/docs/webstore/branding/image/UV4C4ybeBTsZt43U4xis.png)](https://chromewebstore.google.com/detail/pgehhpbnifjlalmmnpiebkjhphojffef)
+从 [Releases](../../releases) 下载最新压缩包并解压，然后：
 
-### 手动安装
+1. 打开 `chrome://extensions/`（Edge 为 `edge://extensions/`）
+2. 右上角开启「开发者模式」
+3. 点「加载已解压的扩展程序」，选择解压出来的目录
+4. 首次使用会自动下载识别模型（约 60MB，含韩文模型），之后走缓存
 
-1. 前往 [Releases](../../releases) 下载当前版本对应浏览器的压缩包：Chromium 使用 `ShinobuTranslator-chrome-v*.zip`，Firefox 使用 `ShinobuTranslator-firefox-v*.zip`
-2. 解压到本地文件夹
-3. Chrome / Edge：打开扩展管理页，启用「开发者模式」，选择「加载已解压的扩展程序」
-4. Firefox Desktop 140+：打开 `about:debugging#/runtime/this-firefox`，选择「临时载入附加组件」，再选择解压目录中的 `manifest.json`
+> Firefox 版本在计划中，当前发布包面向 Chromium 内核浏览器（Chrome / Edge 109+）。
 
-## 效果展示
+## 使用
 
-<table>
-<thead>
-<tr>
-<th align="center" width="50%">原始图片</th>
-<th align="center" width="50%">翻译后图片</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td align="center" width="50%">
-  <a href="https://user-images.githubusercontent.com/31543482/232265329-6a560438-e887-4f7f-b6a1-a61b8648f781.png">
-    <img src="https://user-images.githubusercontent.com/31543482/232265329-6a560438-e887-4f7f-b6a1-a61b8648f781.png">
-  </a>
-  <br>
-  <a href="https://twitter.com/09ra_19ra/status/1647079591109103617/photo/1">Source @09ra_19ra</a>
-</td>
-<td align="center" width="50%">
-  <a href="assets/readme/translated1.png">
-    <img src="assets/readme/translated1.png">
-  </a>
-</td>
-</tr>
-<tr>
-<td align="center" width="50%">
-  <a href="https://user-images.githubusercontent.com/31543482/232265794-5ea8a0cb-42fe-4438-80b7-3bf7eaf0ff2c.png">
-    <img src="https://user-images.githubusercontent.com/31543482/232265794-5ea8a0cb-42fe-4438-80b7-3bf7eaf0ff2c.png">
-  </a>
-  <br>
-  <a href="https://twitter.com/rikak/status/1642727617886556160/photo/1">Source @rikak</a>
-</td>
-<td align="center" width="50%">
-  <a href="assets/readme/translated4.png">
-    <img src="assets/readme/translated4.png">
-  </a>
-</td>
-</tr>
-</tbody>
-</table>
+**整页翻译**：扩展图标打开弹窗，或点 HUD 悬浮窗里的「翻译本页图片」。
 
-## 工作流程
+**翻译单张图**：鼠标悬停在图片上按 `Alt+W`，或直接右键图片选择翻译。
 
-### 本地 OCR 翻译流程
+**框选翻译**：按 `Alt+Q` 框选页面任意区域，适合不支持直接识别的站点或阅读器。
+
+快捷键可以在浏览器的扩展快捷键管理页自定义。
+
+## 配置翻译通道
+
+打开扩展弹窗：
+
+- 默认使用免费通道，开箱即用，无需任何配置
+- 想要更好的对白质量：在「LLM 提供商」选择一家（或选「自定义」填任意 OpenAI 兼容端点），填入对应的 API Key 即可
+
+API Key 只保存在你浏览器的扩展存储里，不经过任何第三方中转。
+
+## 工作原理
 
 ```text
-图片获取 -> 文本检测 -> 气泡检测 -> OCR 识别 -> 文本翻译 -> 蒙版细化 -> 去字修复 -> 自动排版 -> 译图展示
+图片获取 → 文本检测 → 气泡分割 → OCR 识别 → 文本翻译 → 蒙版细化 → 去字修复 → 自动排版 → 译图展示
 ```
 
-本地流程适合常规漫画翻译：视觉模型在浏览器端完成检测、识别、去字和排版，只把识别出的文本交给谷歌翻译或大模型翻译。
+视觉链路（检测 / 分割 / 识别 / 去字 / 排版）全部在浏览器端由 ONNX 模型完成，运行时按环境优先 WebGPU，回退 WASM。只有识别出的纯文本会发给翻译服务。
 
-### Nano Banana 图像翻译流程
-
-```text
-图片获取 -> 发送图片与提示词 -> 多模态理解和翻译 -> 去字重绘和嵌字 -> 译图展示
-```
-
-Nano Banana 流程不走本地 OCR、去字和自动排版链路，而是把图片交给 Nano Banana 进行端到端图像翻译。对于有拟声词和手写字体的漫画翻译效果更佳，而且可以支持英文、韩文等各种语言，但是会对漫画内容本身有一定的影响。
-
-## 功能特性
-
-| 模块 | 说明 |
-| --- | --- |
-| 文本检测 | 自动识别漫画图中的文字区域 |
-| 气泡检测 | 辅助定位对白区域，让去字和嵌字更自然 |
-| OCR 识别 | 使用浏览器端 ONNX 模型识别日文漫画文字 |
-| 翻译 | 支持谷歌翻译、DeepSeek、GLM、Kimi、Qwen（阿里云百炼）、Doubao（火山方舟）、MiniMax、MiMo、OpenAI、自定义供应商 |
-| Nano Banana | 支持使用 Gemini 订阅的 Nano Banana 图像翻译流程，用于端到端翻译和嵌字 |
-| 去字修复 | 使用本地去字模型擦除原文 |
-| 自动排版 | 根据文字区域、方向、颜色和气泡空间自动嵌入译文 |
-| 原图切换 | 支持原图和译图切换查看 |
-| 截图翻译 | 通过快捷键或右键菜单选择页面区域翻译 |
-
-## 设置界面
-
-Qwen（阿里云百炼）使用北京地域的 API Key 和固定的官方兼容接口，模型预设为 `qwen3.8-max`、`qwen3.8-flash`。文本翻译默认关闭思考，也可选择 Low、Medium 或 XHigh。请求参数遵循百炼的 [Chat Completions API](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) 与 [思考模式说明](https://help.aliyun.com/zh/model-studio/deep-thinking)。
-
-<table>
-<tr>
-<td align="center" width="50%">
-  <img src="assets/readme/popup-settings-deepseek-rounded.png" alt="DeepSeek 设置">
-  <br>
-  文本翻译设置
-</td>
-<td align="center" width="50%">
-  <img src="assets/readme/popup-settings-nano-banana-rounded.png" alt="Nano Banana 设置">
-  <br>
-  Nano Banana 图像翻译设置
-</td>
-</tr>
-</table>
-
-## 使用方式
-
-### 已适配站点
-
-在 X 、Pixiv、E-Hentai 的已适配页面中，在大图页面会直接显示翻译按钮。
-
-Pixiv 漫画阅读模式与 GoMuRaw（`gomuraw.onl`、`gomuraw.wiki`、`gomuraw.link`，含 `www` 域名）章节页提供底部按钮，可翻译当前可见页或全部页面。GoMuRaw 整章最多支持 500 页。
-
-### 通用网页翻译
-
-在其他网页中，可以使用以下方式翻译漫画图片：
-
-| 操作 | 默认快捷键 | 说明 |
-| --- | --- | --- |
-| 右键翻译图片 | - | 对右键位置的图片发起翻译 |
-| 截图翻译 | `Alt+Q` | 手动框选页面区域并翻译 |
-| 翻译悬停元素 | `Alt+W` | 翻译鼠标当前悬停的图片或区域 |
-
-快捷键可在浏览器的扩展快捷键页面中调整。
-
-## 翻译配置
-
-扩展弹出页提供以下常用配置：
-
-| 配置 | 说明 |
-| --- | --- |
-| 翻译服务 | 谷歌翻译或大模型翻译 |
-| 大模型提供商 | DeepSeek、Nano Banana、GLM、Kimi、MiniMax、MiMo、OpenAI、自定义提供商 |
-| 模型 | 可使用内置模型列表，也可填写自定义模型名 |
-| 目标语言 | 简体中文或繁体中文 |
-| 处理模式 | 翻译、仅去字、排版原文 |
-| 调试选项 | 阶段耗时、排版调试、去字调试、日志下载 |
-
-使用大模型翻译时，需要填写对应提供商的 API Key。API Key 由用户在扩展设置中输入，项目仓库不包含任何密钥。
-
-## 本地模型与运行时
-
-ShinobuTranslator 使用 `onnxruntime-web` 在浏览器端运行视觉模型。运行时会按环境尝试 WebGPU、WebNN 或 WASM，实际速度取决于浏览器版本、硬件和系统支持情况。
-
-当前模型资源包括：
+## 本地模型
 
 | 模型 | 用途 |
 | --- | --- |
-| `detector` | 文本检测（`detector.ort`） |
-| `bubble` | YOLO11n 气泡实例分割（`bubble.onnx`） |
-| `paddleocr_v6_medium_rec` | PP-OCRv6 medium OCR 识别（`PP-OCRv6_medium_rec.onnx` + `paddleocr_v6_dict.txt`） |
-| `paddleocr_v5_korean_rec` | 韩文 OCR 识别（`korean_PP-OCRv5_mobile_rec.onnx` + `korean_ppocr_v5_dict.txt`），整页语言门控自动启用 |
-| `inpaint` | AOT 去字修复（`aot_inpaint_512.onnx`） |
+| `detector` | 文本区域检测 |
+| `bubble` | 气泡实例分割 |
+| `paddleocr_v6_medium_rec` | 日中英 OCR 识别 |
+| `paddleocr_v5_korean_rec` | 韩文 OCR 识别（整页语言门控自动启用） |
+| `inpaint` | AOT 去字修复 |
 
-## 从源码运行
+## 从源码构建
 
-需要 Node.js、npm，以及 Chrome / Edge 109+ 或 Firefox Desktop 140+。先安装依赖：
+需要 Node.js 18+ 和 npm。
 
 ```bash
 npm install
-```
-
-### 扩展
-
-```bash
-npm run dev:extension          # Chromium
-npm run dev:extension:firefox  # Firefox
-npm run build:extension        # 构建并校验两个目标
-npm run lint:firefox --workspace=@shinobu/extension # 构建后审计 Firefox 警告
-```
-
-普通 UI 改动不需要更新 Firefox lint 基线：检查器通过临时源映射核对已审计警告的第三方源码和原始位置，映射文件不会进入发布包。依赖或警告变化时需要重新审计；Manifest 与独立运行时文件仍校验整文件哈希。
-
-### 网页版
-
-```bash
-npm run dev:web
-npm run build:web
-```
-
-### 检查与模型
-
-```bash
-npm run check            # 完整质量门控
-npm run models:download  # 下载缺少的 ONNX 模型
+npm run dev:extension     # 开发模式（Chromium）
+npm run build:extension   # 构建扩展
+npm run check             # 完整质量门控
 ```
 
 ## 项目结构
 
 ```text
 apps/
-  extension/        Chromium/Firefox 扩展、入口、专属实现与构建配置
-  web/              网页版、历史、PWA 与项目包
-  model-gateway/    Cloudflare Workers 私有 R2 模型网关
+  extension/        浏览器扩展（Chromium / Firefox）
+  web/              网页版
+  model-gateway/    模型资源网关
 packages/
-  translator-core/  扩展与网页版共用的任务核心
-  browser-runtime/  Worker 宿主与浏览器运行时 Adapter
-  diagnostics/      扩展与网页版共用的诊断与性能记录
-  image-pipeline/   检测、OCR、翻译、去字与排版流水线
-  model-runtime/    模型加载、推理后端与共享 ONNX Worker
-  shared-config/    网页版配置 Schema、默认值与迁移
-  text-translation/ 文本翻译供应商与传输协议
-  model-manifest/   网页版与网关共用的内容哈希模型清单
+  image-pipeline/   检测、OCR、去字与排版流水线
+  text-translation/ 翻译供应商接入
+  model-runtime/    模型加载与 ONNX Worker
+  translator-core/  任务核心
+  ...
 public/
-  models/           浏览器端 ONNX 模型资源
-  icons/            扩展与网页版图标
-assets/
-  readme/           README 展示图、设置截图与演示视频
-docs/
-  agents/           Agent 协作所需的领域、Issue 与分诊约定
-benchmark/
-  perf/             性能与浏览器端 smoke 测试
-  typeset/          排版基准测试
+  models/           模型清单与词典
+  icons/            图标资源
 ```
 
-## 隐私与安全
+## 隐私
 
-- 项目不包含任何内置 API Key 或密钥
-- 用户填写的 API Key 保存在浏览器扩展存储中
-- 本地视觉流水线在浏览器端运行，不依赖个人服务器
-- 使用 Google Web、LLM 或 Nano Banana 时，请自行确认对应服务的隐私政策、费用和使用条款
-- 扩展权限以 `apps/extension/manifest.ts` 生成的目标 manifest 为准
-- 网页版隐私边界、Cloudflare 元数据和本地存储规则见 [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
+- 项目不内置任何 API Key
+- 检测、识别、去字、排版在本地模型中完成，图片本身不上传
+- 仅识别出的文字会发给你选择的翻译服务
+- 使用第三方翻译或 LLM 服务时，请自行了解其隐私政策与条款
 
 ## 致谢
 
-本项目的灵感与部分模型处理思路来自：
+- [manga-image-translator](https://github.com/zyddnys/manga-image-translator) —— 漫画翻译流水线的思路来源
+- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) —— OCR 模型
+- [onnxruntime-web](https://onnxruntime.ai/) —— 浏览器端推理运行时
 
-- [zyddnys/manga-image-translator](https://github.com/zyddnys/manga-image-translator)
-- [manga-image-translator 相关油猴脚本](https://greasyfork.org/scripts/437569)
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
-- [ONNX Runtime Web](https://onnxruntime.ai/)
-
-第三方模型、脚本和许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-npm 生产依赖精确版本与许可证快照见
-[THIRD_PARTY_DEPENDENCIES.json](THIRD_PARTY_DEPENDENCIES.json)。
+第三方模型与依赖的许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 
-本项目基于 [GPL-3.0](LICENSE) 许可证开源。
+本项目基于 [GPL-3.0](LICENSE) 开源。
 
 ## 免责声明
 
-ShinobuTranslator 仅用于个人学习、研究和合法授权内容的辅助翻译。使用者应自行确认对输入图片、翻译结果和后续传播行为拥有合法权利，并遵守所在地法律法规、平台规则和第三方服务条款。翻译结果由模型或第三方服务生成，可能存在错误，请在发布或二次使用前自行校对。
-
-## Star History
-
-<a href="https://www.star-history.com/?type=date&repos=DonutShinobu%2FShinobuTranslator">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=DonutShinobu/ShinobuTranslator&type=date&theme=dark&legend=top-left&sealed_token=_sAHU9p_GIu8YRV4B1NUeFz_jiIPnpUA45CXVeha2WML7vAOrj2RNdn0U_HwonQp0os2_7btrkuqTaS_oYbD05lru-v-5FngnxpQ8dxLhVBA63qPeU3Dlw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=DonutShinobu/ShinobuTranslator&type=date&legend=top-left&sealed_token=_sAHU9p_GIu8YRV4B1NUeFz_jiIPnpUA45CXVeha2WML7vAOrj2RNdn0U_HwonQp0os2_7btrkuqTaS_oYbD05lru-v-5FngnxpQ8dxLhVBA63qPeU3Dlw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=DonutShinobu/ShinobuTranslator&type=date&legend=top-left&sealed_token=_sAHU9p_GIu8YRV4B1NUeFz_jiIPnpUA45CXVeha2WML7vAOrj2RNdn0U_HwonQp0os2_7btrkuqTaS_oYbD05lru-v-5FngnxpQ8dxLhVBA63qPeU3Dlw" />
- </picture>
-</a>
+本项目仅供个人学习与研究，用于合法授权内容的辅助翻译。使用者应自行确认对输入图片、翻译结果及后续传播拥有合法权利，并遵守所在地法律法规与平台规则。翻译结果由模型或第三方服务生成，可能存在错误，发布或二次使用前请自行校对。
