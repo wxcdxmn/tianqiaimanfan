@@ -1,0 +1,46 @@
+import { resolve } from 'node:path';
+import { build } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
+import { chromiumColdStartPlugin, firefoxColdStartPlugin } from '../../../scripts/cold-start-defaults.mjs';
+import { firefoxLintSourceMapsPlugin } from '../../../scripts/firefox-lint-source-maps.mjs';
+
+function readRequiredOption(name) {
+  const index = process.argv.indexOf(name);
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  if (!value || value.startsWith('--')) throw new Error(`${name} is required`);
+  return value;
+}
+
+const extensionRoot = resolve(import.meta.dirname, '..');
+const outputDir = resolve(process.cwd(), readRequiredOption('--out-dir'));
+const chromeStore = process.argv.includes('--chrome-store');
+const chromium = chromeStore || outputDir.endsWith('dist-chromium');
+
+await build({
+  configFile: false,
+  root: extensionRoot,
+  publicDir: false,
+  plugins: [
+    tailwindcss(),
+    chromium ? chromiumColdStartPlugin : firefoxColdStartPlugin,
+    ...(outputDir.endsWith('dist-firefox') ? [firefoxLintSourceMapsPlugin(outputDir)] : []),
+  ],
+  define: {
+    'import.meta.env.SHINOBU_CHROME_STORE': JSON.stringify(chromeStore),
+  },
+  build: {
+    outDir: outputDir,
+    emptyOutDir: false,
+    lib: {
+      entry: resolve(extensionRoot, 'src/content/index.ts'),
+      formats: ['iife'],
+      name: 'ShinobuTranslatorContent',
+      fileName: () => 'content.js',
+    },
+    rollupOptions: {
+      output: {
+        inlineDynamicImports: true,
+      },
+    },
+  },
+});

@@ -1,0 +1,442 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  adaptLlmThinkingChatCompletionRequest,
+  createDefaultLlmThinkingByModel,
+  getLlmThinkingCapability,
+  getLlmThinkingControl,
+  llmThinkingCapabilityRegistry,
+  normalizeLlmThinkingByModel,
+} from '../../packages/text-translation/src/llmThinking';
+import { llmBuiltInProviderDefinitions } from '../../apps/extension/src/shared/config';
+
+describe('built-in LLM thinking capabilities', () => {
+  it.each(['qwen3.8-max', 'qwen3.8-flash'])('maps Bailian thinking levels for %s and preserves JSON output', (model) => {
+    for (const level of ['off', 'low', 'medium', 'xhigh'] as const) {
+      const body = {
+        model, messages: [], response_format: { type: 'json_object' as const },
+        thinking: { type: 'enabled' as const }, reasoning_split: true,
+        reasoning_effort: 'max' as const,
+      };
+      const context = { provider: 'alibaba' as const, model, level };
+      const request = adaptLlmThinkingChatCompletionRequest(body, context);
+      expect(request.enable_thinking).toBe(level !== 'off');
+      expect(request.reasoning_effort).toBe(level === 'off' ? undefined : level);
+      expect(request.response_format).toEqual({ type: 'json_object' });
+      expect(request).not.toHaveProperty('thinking');
+      expect(request).not.toHaveProperty('reasoning_split');
+      expect(adaptLlmThinkingChatCompletionRequest(request, context)).toEqual(request);
+      expect(body.reasoning_effort).toBe('max');
+    }
+    expect(normalizeLlmThinkingByModel({ [`alibaba/${model}`]: 'high' })[`alibaba/${model}`]).toBe('off');
+  });
+
+  it.each(['glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx', 'gpt-6-astra', 'gpt-6.1-sol'])('keeps reasoning enabled for %s, including invalid saved off settings', (model) => {
+    const provider = model.startsWith('glm') ? 'glm' : 'openai';
+    for (const level of ['off', 'low', 'high', 'max'] as const) {
+      const request = adaptLlmThinkingChatCompletionRequest({ model, messages: [] }, { provider, model, level });
+      expect(request.reasoning_effort).toBe(level === 'off' ? 'low' : level);
+      if (provider === 'glm') expect(request.thinking).toEqual({ type: 'enabled' });
+    }
+  });
+
+  it.each(['deepseek-flash', 'deepseek-v4-pro'])('sends the supported DeepSeek low effort for %s', (model) => {
+    expect(adaptLlmThinkingChatCompletionRequest({ model, messages: [] }, {
+      provider: 'deepseek', model, level: 'low',
+    })).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low' });
+  });
+
+  it('maps every MiniMax Flash effort and falls back to max without disabling thinking', () => {
+    const model = 'MiniMax-M3.1-Flash';
+    const key = `minimax/${model}`;
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max', 'off', 'on', undefined] as const) {
+      const expected = level === 'off' || level === 'on' || level === undefined ? 'max' : level;
+      const body = {
+        model, messages: [], response_format: { type: 'json_object' as const },
+        thinking: { type: 'disabled' as const }, reasoning_split: false,
+        reasoning_effort: 'none' as const,
+      };
+      const context = { provider: 'minimax' as const, model, level };
+      const request = adaptLlmThinkingChatCompletionRequest(body, context);
+      expect(request).toEqual({ model, messages: [], reasoning_split: true, reasoning_effort: expected });
+      expect(adaptLlmThinkingChatCompletionRequest(request, context)).toEqual(request);
+      expect(normalizeLlmThinkingByModel({ [key]: level })[key]).toBe(expected);
+      expect(body).toMatchObject({ thinking: { type: 'disabled' }, reasoning_split: false, reasoning_effort: 'none' });
+    }
+    expect(createDefaultLlmThinkingByModel()[key]).toBe('max');
+    expect(getLlmThinkingControl('minimax', model)).toEqual({
+      kind: 'slider',
+      options: [
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'high', label: 'High' },
+        { value: 'xhigh', label: 'XHigh' },
+        { value: 'max', label: 'Max' },
+      ],
+    });
+  });
+
+  it.each([
+    'doubao-seed-evolving',
+    'doubao-seed-2-1-pro-260915',
+    'doubao-seed-2-1-lite-260915',
+    'doubao-seed-2-1-turbo-260628',
+  ])('maps Doubao thinking levels and defaults to off for %s', (model) => {
+    const key = `doubao/${model}`;
+    for (const level of ['off', 'low', 'medium', 'high'] as const) {
+      const body = {
+        model, messages: [], response_format: { type: 'json_object' as const },
+        thinking: { type: 'enabled' as const }, reasoning_split: true,
+        reasoning_effort: 'max' as const,
+      };
+      const context = { provider: 'doubao' as const, model, level };
+      const request = adaptLlmThinkingChatCompletionRequest(body, context);
+      expect(request.thinking).toEqual({ type: level === 'off' ? 'disabled' : 'enabled' });
+      expect(request.reasoning_effort).toBe(level === 'off' ? undefined : level);
+      expect(request.response_format).toEqual({ type: 'json_object' });
+      expect(request).not.toHaveProperty('reasoning_split');
+      expect(adaptLlmThinkingChatCompletionRequest(request, context)).toEqual(request);
+      expect(normalizeLlmThinkingByModel({ [key]: level })[key]).toBe(level);
+      expect(body.reasoning_effort).toBe('max');
+    }
+    expect(createDefaultLlmThinkingByModel()[key]).toBe('off');
+    expect(normalizeLlmThinkingByModel({ [key]: 'xhigh' })[key]).toBe('off');
+    expect(adaptLlmThinkingChatCompletionRequest({ model, messages: [] }, {
+      provider: 'doubao', model, level: undefined,
+    })).toEqual({ model, messages: [], thinking: { type: 'disabled' } });
+  });
+
+  it('matches the official-verified capability matrix for every built-in text model', () => {
+    expect(llmThinkingCapabilityRegistry).toEqual({
+      'alibaba/qwen3.8-max': {
+        levels: ['off', 'low', 'medium', 'xhigh'],
+        defaultLevel: 'off',
+      },
+      'alibaba/qwen3.8-flash': {
+        levels: ['off', 'low', 'medium', 'xhigh'],
+        defaultLevel: 'off',
+      },
+      'deepseek/deepseek-flash': {
+        levels: ['off', 'low', 'high', 'max'],
+        defaultLevel: 'off',
+      },
+      'deepseek/deepseek-v4-pro': {
+        levels: ['off', 'low', 'high', 'max'],
+        defaultLevel: 'off',
+      },
+      'doubao/doubao-seed-evolving': {
+        levels: ['off', 'low', 'medium', 'high'],
+        defaultLevel: 'off',
+      },
+      'doubao/doubao-seed-2-1-pro-260915': {
+        levels: ['off', 'low', 'medium', 'high'],
+        defaultLevel: 'off',
+      },
+      'doubao/doubao-seed-2-1-lite-260915': {
+        levels: ['off', 'low', 'medium', 'high'],
+        defaultLevel: 'off',
+      },
+      'doubao/doubao-seed-2-1-turbo-260628': {
+        levels: ['off', 'low', 'medium', 'high'],
+        defaultLevel: 'off',
+      },
+      'glm/glm-5.3': {
+        levels: ['low', 'high', 'max'],
+        defaultLevel: 'low',
+      },
+      'glm/glm-5.3-flash': {
+        levels: ['low', 'high', 'max'],
+        defaultLevel: 'low',
+      },
+      'glm/glm-5.3-flashx': {
+        levels: ['low', 'high', 'max'],
+        defaultLevel: 'low',
+      },
+      'kimi/kimi-k3': {
+        levels: ['low', 'high', 'max'],
+        defaultLevel: 'max',
+      },
+      'kimi/kimi-k3.1-pro': {
+        levels: ['low', 'high', 'max'],
+        defaultLevel: 'max',
+      },
+      'kimi/kimi-k2.7-code': {
+        levels: ['on'],
+        defaultLevel: 'on',
+      },
+      'kimi/kimi-k2.6': {
+        levels: ['off', 'on'],
+        defaultLevel: 'off',
+      },
+      'minimax/MiniMax-M3': {
+        levels: ['off', 'on'],
+        defaultLevel: 'off',
+      },
+      'minimax/MiniMax-M3.1-Flash': {
+        levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultLevel: 'max',
+      },
+      'minimax/MiniMax-M2.7': {
+        levels: ['on'],
+        defaultLevel: 'on',
+      },
+      'minimax/MiniMax-M2.5': {
+        levels: ['on'],
+        defaultLevel: 'on',
+      },
+      'mimo/mimo-v2.6-pro': {
+        levels: ['off', 'on'],
+        defaultLevel: 'off',
+      },
+      'mimo/mimo-v2.6-flash': {
+        levels: ['off', 'on'],
+        defaultLevel: 'off',
+      },
+      'openai/gpt-6-astra': {
+        levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultLevel: 'low',
+      },
+      'openai/gpt-6.1-sol': {
+        levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultLevel: 'low',
+      },
+      'openai/gpt-6-sol': {
+        levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+        defaultLevel: 'off',
+      },
+      'openai/gpt-6-luna': {
+        levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+        defaultLevel: 'off',
+      },
+    });
+  });
+
+  it('derives toggle, slider, and fixed controls without exposing unsupported off states', () => {
+    expect(getLlmThinkingControl('kimi', 'kimi-k2.6')).toMatchObject({
+      kind: 'toggle',
+      options: [
+        { value: 'off', label: '关闭' },
+        { value: 'on', label: '开启' },
+      ],
+    });
+    expect(getLlmThinkingControl('deepseek', 'deepseek-v4-pro')).toMatchObject({
+      kind: 'slider',
+      options: [
+        { value: 'off', label: '关闭' },
+        { value: 'low', label: 'Low' },
+        { value: 'high', label: 'High' },
+        { value: 'max', label: 'Max' },
+      ],
+    });
+    expect(getLlmThinkingControl('openai', 'gpt-6-astra')).toMatchObject({
+      kind: 'slider',
+      options: [
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'high', label: 'High' },
+        { value: 'xhigh', label: 'XHigh' },
+        { value: 'max', label: 'Max' },
+      ],
+    });
+    expect(getLlmThinkingControl('kimi', 'kimi-k3')).toEqual({
+      kind: 'slider',
+      options: [
+        { value: 'low', label: 'Low' },
+        { value: 'high', label: 'High' },
+        { value: 'max', label: 'Max' },
+      ],
+    });
+    expect(getLlmThinkingCapability('gemini', 'gemini-3.1-flash-image')).toBeNull();
+    expect(getLlmThinkingCapability('custom', 'any-model')).toBeNull();
+  });
+
+  it('requires every built-in text model to have one exact capability definition', () => {
+    const catalogKeys = Object.entries(llmBuiltInProviderDefinitions)
+      .flatMap(([provider, definition]) => (
+        provider === 'gemini'
+          ? []
+          : definition.models.map((model) => `${provider}/${model}`)
+      ))
+      .sort();
+
+    expect(Object.keys(llmThinkingCapabilityRegistry).sort()).toEqual(catalogKeys);
+  });
+
+  it('normalizes invalid saved levels to each model safe default without affecting other models', () => {
+    expect(normalizeLlmThinkingByModel({
+      'deepseek/deepseek-flash': 'high',
+      'deepseek/deepseek-v4-pro': 'invalid',
+      'openai/gpt-6-astra': 'off',
+    })).toMatchObject({
+      'deepseek/deepseek-flash': 'high',
+      'deepseek/deepseek-v4-pro': 'off',
+      'openai/gpt-6-astra': 'low',
+    });
+    expect(createDefaultLlmThinkingByModel()).toMatchObject({
+      'deepseek/deepseek-flash': 'off',
+      'kimi/kimi-k3': 'max',
+      'minimax/MiniMax-M2.7': 'on',
+      'openai/gpt-6-astra': 'low',
+    });
+  });
+
+  it.each(['kimi-k3', 'kimi-k3.1-pro'])('preserves saved %s effort and normalizes unsupported off to max', (model) => {
+    for (const level of ['low', 'high', 'max', 'off'] as const) {
+      const expected = level === 'off' ? 'max' : level;
+      expect(normalizeLlmThinkingByModel({ [`kimi/${model}`]: level })[`kimi/${model}`]).toBe(expected);
+      const request = adaptLlmThinkingChatCompletionRequest({ model, messages: [],
+        thinking: { type: 'disabled' }, reasoning_effort: 'none' }, {
+        provider: 'kimi', model, level,
+      });
+      expect(request.reasoning_effort).toBe(expected);
+      expect(request).not.toHaveProperty('thinking');
+    }
+  });
+
+  it.each(['kimi-k2.7-code'])('keeps thinking enabled for %s', (model) => {
+    expect(getLlmThinkingControl('kimi', model)).toEqual({
+      kind: 'fixed', options: [{ value: 'on', label: '开启' }], notice: '该模型不支持关闭思考模式',
+    });
+    expect(normalizeLlmThinkingByModel({ [`kimi/${model}`]: 'off' })[`kimi/${model}`]).toBe('on');
+    const request = adaptLlmThinkingChatCompletionRequest({ model, messages: [],
+      thinking: { type: 'disabled' }, reasoning_effort: 'max' }, {
+      provider: 'kimi', model, level: 'off',
+    });
+    expect(request.thinking).toEqual({ type: 'enabled' });
+    expect(request).not.toHaveProperty('reasoning_effort');
+  });
+
+  it.each(['gpt-6-sol', 'gpt-6-luna'])('preserves all supported efforts and maps off to none for %s', (model) => {
+    for (const level of ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      const request = adaptLlmThinkingChatCompletionRequest({ model, messages: [], thinking: { type: 'disabled' } }, {
+        provider: 'openai', model, level,
+      });
+      expect(request.reasoning_effort).toBe(level === 'off' ? 'none' : level);
+      expect(request).not.toHaveProperty('thinking');
+    }
+  });
+
+  it.each([
+    ['mimo-v2.5-pro', 'mimo-v2.6-pro'],
+    ['MiMo-V2.5-Pro', 'mimo-v2.6-pro'],
+    ['mimo-v2.5', 'mimo-v2.6-flash'],
+    ['MiMo-V2.5', 'mimo-v2.6-flash'],
+  ])('migrates saved %s thinking levels to %s', (previousModel, model) => {
+    const normalized = normalizeLlmThinkingByModel({ [`mimo/${previousModel}`]: 'on' });
+    expect(normalized[`mimo/${model}`]).toBe('on');
+    expect(normalized).not.toHaveProperty(`mimo/${previousModel}`);
+    expect(normalizeLlmThinkingByModel(normalized)).toEqual(normalized);
+  });
+
+  it.each(['mimo-v2.6-pro', 'mimo-v2.6-flash'])('supports both thinking modes for %s', (model) => {
+    for (const level of ['off', 'on'] as const) {
+      expect(normalizeLlmThinkingByModel({ [`mimo/${model}`]: level })[`mimo/${model}`]).toBe(level);
+      const request = adaptLlmThinkingChatCompletionRequest({ model, messages: [], reasoning_effort: 'max' }, {
+        provider: 'mimo', model, level,
+      });
+      expect(request.thinking).toEqual({ type: level === 'off' ? 'disabled' : 'enabled' });
+      expect(request).not.toHaveProperty('reasoning_effort');
+    }
+  });
+
+  it('maps canonical levels to each provider exact Chat Completions fields', () => {
+    const body = {
+      model: 'placeholder',
+      messages: [{ role: 'user' as const, content: 'translate' }],
+      response_format: { type: 'json_object' as const },
+    };
+
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro',
+      level: 'off',
+    })).toMatchObject({
+      thinking: { type: 'disabled' },
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro',
+      level: 'max',
+    })).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'max',
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'glm',
+      model: 'glm-5.3',
+      level: 'high',
+    })).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'high',
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'kimi',
+      model: 'kimi-k3',
+      level: 'max',
+    })).toMatchObject({
+      reasoning_effort: 'max',
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'kimi',
+      model: 'kimi-k2.6',
+      level: 'off',
+    })).toMatchObject({
+      thinking: { type: 'disabled' },
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'minimax',
+      model: 'MiniMax-M3',
+      level: 'on',
+    })).toEqual({
+      model: 'placeholder',
+      messages: [{ role: 'user', content: 'translate' }],
+      reasoning_split: true,
+      thinking: { type: 'adaptive' },
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'minimax',
+      model: 'MiniMax-M2.7',
+      level: 'on',
+    })).toEqual({
+      model: 'placeholder',
+      messages: [{ role: 'user', content: 'translate' }],
+      reasoning_split: true,
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'mimo',
+      model: 'mimo-v2.6-flash',
+      level: 'off',
+    })).toMatchObject({
+      thinking: { type: 'disabled' },
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'openai',
+      model: 'gpt-6-sol',
+      level: 'off',
+    })).toMatchObject({
+      reasoning_effort: 'none',
+    });
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'openai',
+      model: 'gpt-6-sol',
+      level: 'max',
+    })).toMatchObject({
+      reasoning_effort: 'max',
+    });
+  });
+
+  it('leaves custom-model requests untouched', () => {
+    const body = {
+      model: 'deepseek-custom',
+      messages: [{ role: 'user' as const, content: 'translate' }],
+      response_format: { type: 'json_object' as const },
+    };
+
+    expect(adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'deepseek',
+      model: 'deepseek-custom',
+      level: undefined,
+      useCustomModel: true,
+    })).toEqual(body);
+  });
+});
