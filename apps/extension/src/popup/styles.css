@@ -672,6 +672,24 @@ body {
   margin: 0;
 }
 
+/* ── Current site ── */
+.site-panel .site-host {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--text-primary);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-label);
+}
+
 .mode-options-trigger {
   justify-content: flex-start;
   gap: 6px;

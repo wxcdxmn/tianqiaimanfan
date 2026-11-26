@@ -3,6 +3,7 @@ import { pixivAdapter } from './adapters/pixiv';
 import { ehentaiAdapter } from './adapters/ehentai';
 import { gomurawAdapter } from './adapters/gomuraw';
 import { createGenericSiteAdapter, toggleGenericSiteForCurrentHost } from './generic/genericSiteAdapter';
+import { readGenericSiteState, setGenericSiteState } from './generic/genericSiteRegistry';
 import { TranslatorCore } from './core/TranslatorCore';
 import { getExtensionApi, type ExtensionPort } from '../shared/extensionRuntime';
 import { toErrorMessage } from '../shared/utils';
@@ -351,6 +352,56 @@ if (chromeApi?.runtime?.onMessage?.addListener) {
           sendResponse({ ok: false, type: 'mt:shortcut-translate-hover', error: toErrorMessage(error) });
         }
       })();
+      return true;
+    }
+
+    if (message.type === 'mt:generic-site-status') {
+      if (siteAdapter) {
+        sendResponse({
+          ok: true,
+          type: 'mt:generic-site-status',
+          host: location.hostname,
+          builtIn: true,
+          enabled: false,
+          auto: false,
+        });
+        return true;
+      }
+      void readGenericSiteState(location.hostname).then((state) => {
+        sendResponse({
+          ok: true,
+          type: 'mt:generic-site-status',
+          host: location.hostname,
+          builtIn: false,
+          enabled: state.enabled,
+          auto: state.auto,
+        });
+      }).catch((error: unknown) => {
+        sendResponse({ ok: false, type: 'mt:generic-site-status', error: toErrorMessage(error) });
+      });
+      return true;
+    }
+
+    if (message.type === 'mt:set-generic-site') {
+      if (siteAdapter) {
+        sendResponse({ ok: false, type: 'mt:set-generic-site', error: '该站点已有内置适配器' });
+        return true;
+      }
+      const patch = {
+        ...(typeof message.enabled === 'boolean' ? { enabled: message.enabled } : {}),
+        ...(typeof message.auto === 'boolean' ? { auto: message.auto } : {}),
+      };
+      void setGenericSiteState(location.hostname, patch).then((state) => {
+        sendResponse({
+          ok: true,
+          type: 'mt:set-generic-site',
+          host: location.hostname,
+          enabled: state.enabled,
+          auto: state.auto,
+        });
+      }).catch((error: unknown) => {
+        sendResponse({ ok: false, type: 'mt:set-generic-site', error: toErrorMessage(error) });
+      });
       return true;
     }
 

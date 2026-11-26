@@ -27,6 +27,7 @@ import {
   registerMenusAndCommands,
   startScreenshotTranslateCommand,
   translateHoverTargetCommand,
+  toggleGenericSiteMenuId,
   translateImageMenuId,
   translateScreenshotMenuId,
 } from '../../apps/extension/src/background/menus/registerMenus';
@@ -45,6 +46,7 @@ describe('background stable identifiers', () => {
       openAiOAuthInstallationIdStorageKey,
       translateImageMenuId,
       translateScreenshotMenuId,
+      toggleGenericSiteMenuId,
       startScreenshotTranslateCommand,
       translateHoverTargetCommand,
     }).toEqual({
@@ -54,6 +56,7 @@ describe('background stable identifiers', () => {
       openAiOAuthInstallationIdStorageKey: 'mangaTranslate.openaiOAuthInstallationId',
       translateImageMenuId: 'translate-image',
       translateScreenshotMenuId: 'translate-screenshot',
+      toggleGenericSiteMenuId: 'toggle-generic-site',
       startScreenshotTranslateCommand: 'start-screenshot-translate',
       translateHoverTargetCommand: 'translate-hover-target',
     });
@@ -98,12 +101,14 @@ describe('background stable identifiers', () => {
 
     expect(create).not.toHaveBeenCalled();
     onInstalled?.();
-    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(3);
     expect(create).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: translateImageMenuId }));
     expect(create).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: translateScreenshotMenuId }));
+    expect(create).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: toggleGenericSiteMenuId }));
 
     onClicked?.({ menuItemId: translateImageMenuId }, { id: 7 });
     onClicked?.({ menuItemId: translateScreenshotMenuId }, { id: 8 });
+    onClicked?.({ menuItemId: toggleGenericSiteMenuId }, { id: 11 });
     onCommand?.(startScreenshotTranslateCommand, { id: 9 });
     onCommand?.(translateHoverTargetCommand, { id: 10 });
     await Promise.resolve();
@@ -111,6 +116,7 @@ describe('background stable identifiers', () => {
     expect(sendMessage.mock.calls).toEqual([
       [7, { type: 'mt:context-menu-translate' }],
       [8, { type: 'mt:start-screenshot-translate' }],
+      [11, { type: 'mt:toggle-generic-site' }],
       [9, { type: 'mt:start-screenshot-translate' }],
       [10, { type: 'mt:shortcut-translate-hover' }],
     ]);

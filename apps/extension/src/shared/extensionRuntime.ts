@@ -139,6 +139,14 @@ export type ExtensionBrowserApi = {
     };
   };
   storage?: {
+    onChanged?: {
+      addListener: (
+        listener: (
+          changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+          areaName?: string,
+        ) => void,
+      ) => void;
+    };
     local?: {
       get?: (keys: string | string[] | Record<string, unknown>, callback: (items: Record<string, unknown>) => void) => void;
       set?: (items: Record<string, unknown>, callback: () => void) => void;
@@ -152,8 +160,8 @@ export type ExtensionBrowserApi = {
   };
   tabs?: {
     query?: (
-      queryInfo: { active?: boolean; windowId?: number },
-      callback: (tabs: Array<{ id?: number }>) => void,
+      queryInfo: { active?: boolean; currentWindow?: boolean; windowId?: number },
+      callback: (tabs: Array<{ id?: number; url?: string }>) => void,
     ) => void;
     sendMessage?: (tabId: number, message: unknown) => Promise<unknown>;
     captureVisibleTab?: (

@@ -122,6 +122,11 @@ export interface SiteAdapter {
   createUiAnchor(target: ImageTarget): HTMLElement;
   applyImage(target: ImageTarget, url: string): void;
   observe(onChange: () => void): () => void;
+  /**
+   * Per-site Auto override. When present it wins over the global preference, so
+   * an adapter can follow the reader's viewport on its own terms.
+   */
+  isAutoTranslateEnabled?(): boolean;
   /** Whether the site is currently in a multi-page reading mode (e.g. Pixiv manga viewer). */
   isReadingMode?(): boolean;
   /** Stable key for the current reading work; hash-only page changes keep the same key. */

@@ -4,6 +4,8 @@
  * translated first (RuneManga's scrolling window, without server involvement).
  */
 
+import { viewportPriority, type ViewportSize } from '../core/auto/viewportPriority';
+
 export type GenericImageCandidate = {
   key: string;
   element: HTMLImageElement;
@@ -12,10 +14,7 @@ export type GenericImageCandidate = {
   viewportPriority: number;
 };
 
-export type ViewportSize = {
-  width: number;
-  height: number;
-};
+export type { ViewportSize };
 
 export type ScanOptions = {
   root?: Document;
@@ -61,20 +60,6 @@ function resolveSourceUrl(image: HTMLImageElement): string {
   return current.trim();
 }
 
-function toViewportPriority(rect: DOMRect, viewport: ViewportSize): number {
-  const intersects = rect.bottom > 0
-    && rect.top < viewport.height
-    && rect.right > 0
-    && rect.left < viewport.width;
-  if (intersects) return 0;
-
-  const centerX = viewport.width / 2;
-  const centerY = viewport.height / 2;
-  const nearestX = Math.max(rect.left, Math.min(centerX, rect.right));
-  const nearestY = Math.max(rect.top, Math.min(centerY, rect.bottom));
-  return Math.hypot(nearestX - centerX, nearestY - centerY);
-}
-
 function stableKey(image: HTMLImageElement, url: string, seen: Map<string, number>): string {
   const existing = image.getAttribute(genericImageKeyAttr);
   if (existing) return existing;
@@ -111,7 +96,7 @@ export function scanGenericImages(options: ScanOptions = {}): GenericImageCandid
       key: stableKey(image, url, seen),
       element: image,
       url,
-      viewportPriority: toViewportPriority(rect, viewport),
+      viewportPriority: viewportPriority(rect, viewport),
     });
   }
 
