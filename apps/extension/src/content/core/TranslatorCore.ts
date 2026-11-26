@@ -23,6 +23,7 @@ import type { ReaderEngineReadingModeModulePort } from './reading/readerEngineRe
 import { createSiteReadingModeAdapter } from './reading/siteReadingModeAdapter';
 import { ImageLayerEditor } from './editing/imageLayerEditor';
 import { observeContentBooleanPreference } from './contentPreference';
+import { createFloatingHub, type FloatingHub } from './ui/floatingHub';
 import { AutoTranslationScheduler, type AutoTaskState } from './auto/autoTranslationScheduler';
 
 type MountedImage = {
@@ -55,6 +56,7 @@ export class TranslatorCore {
   private stopped = false;
   private autoTranslate = false;
   private stopAutoTranslatePreference: (() => void) | null = null;
+  private floatingHub: FloatingHub | null = null;
 
   constructor(adapter: SiteAdapter, contentSessionId?: string) {
     this.adapter = adapter;
@@ -131,6 +133,8 @@ export class TranslatorCore {
     this.readingModeController.teardown();
     this.autoScheduler.dispose();
     this.readerEngineReadingModeModule?.dispose();
+    this.floatingHub?.destroy();
+    this.floatingHub = null;
     this.screenshotController.dispose();
     this.imageTranslationController.dispose();
     this.imageTranslationExecutionArbiter.dispose('翻译核心已停止');
@@ -154,6 +158,11 @@ export class TranslatorCore {
       this.scheduleSync();
     });
     this.disposeObserver = this.adapter.observe(() => this.scheduleSync());
+    this.floatingHub = createFloatingHub({
+      translateAll: () => this.translateAllImages(),
+      startScreenshot: () => void this.startScreenshotTranslate(),
+      toggleModes: () => this.toggleAllDisplayModes(),
+    });
     this.sync();
   }
 
@@ -268,7 +277,53 @@ export class TranslatorCore {
       editor.sync();
     }
 
+    this.syncFloatingHub();
     this.syncAutoTranslate(targets);
+  }
+
+  /** 悬浮窗可见性与状态行：有可翻译图片时显示，运行中显示进度。 */
+  private syncFloatingHub(): void {
+    if (!this.floatingHub) return;
+    const states = [...this.mounted.values()]
+      .map((mounted) => this.stateStore.get(mounted.key))
+      .filter((state): state is PhotoState => !!state);
+    const running = states.filter((state) => state.status === 'running').length;
+    const total = this.mounted.size;
+    this.floatingHub.setVisible(total > 0);
+    this.floatingHub.setStatus(running, total);
+    this.floatingHub.setBusy(running > 0);
+  }
+
+  /** 悬浮窗「翻译本页图片」：翻译所有空闲图片；若全部已完成则整页重翻。 */
+  private translateAllImages(): void {
+    const idle: ImageTarget[] = [];
+    const all: ImageTarget[] = [];
+    for (const mounted of this.mounted.values()) {
+      all.push(mounted.target);
+      const taskState = this.resolveAutoTaskState(mounted.key);
+      if (taskState === 'idle') idle.push(mounted.target);
+    }
+    const targets = idle.length > 0 ? idle : all;
+    for (const target of targets) {
+      void this.imageTranslationController.handleTranslateClick(target);
+    }
+  }
+
+  /** 悬浮窗「原文/译文」：对已有译图的条目整体切换显示模式。 */
+  private toggleAllDisplayModes(): void {
+    for (const mounted of this.mounted.values()) {
+      const state = this.stateStore.get(mounted.key);
+      if (!state?.translatedUrl) continue;
+      if (state.mode === 'translated') {
+        state.mode = 'original';
+        state.status = 'showingOriginal';
+      } else {
+        state.mode = 'translated';
+        state.status = 'translated';
+      }
+      this.applyStateImage(mounted.target, state);
+      this.renderForKey(mounted.key);
+    }
   }
 
   private renderForKey(key: string): void {

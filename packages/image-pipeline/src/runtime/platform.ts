@@ -101,6 +101,14 @@ export interface PipelineImage {
   close?(): void;
 }
 
+/** Axis-aligned sub-rectangle of a source image, in source pixel units. */
+export type ImageCrop = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type PipelineFontDescriptors = {
   style?: string;
   weight?: string;
@@ -120,8 +128,11 @@ export interface PlatformProvider {
   /** Load an image from a source (data URL, file path, etc.). */
   loadImage(src: string): Promise<PipelineImage>;
 
-  /** Create a transferable bitmap for GPU preprocessing when supported. */
-  createImageBitmap?(image: PipelineImage): Promise<ImageBitmap>;
+  /**
+   * Create a transferable bitmap for GPU preprocessing when supported.
+   * `crop` limits the bitmap to a sub-rectangle of the source (webtoon slicing).
+   */
+  createImageBitmap?(image: PipelineImage, crop?: ImageCrop): Promise<ImageBitmap>;
 
   /** Create an ImageData object with the given dimensions. */
   createImageData(width: number, height: number): PipelineImageData;

@@ -12,6 +12,12 @@ import {
   resolveLlmThinkingLevel,
 } from '@shinobu/text-translation';
 import type { LlmThinkingByModel } from '@shinobu/text-translation';
+import {
+  AUTO_SOURCE_LANGUAGE,
+  normalizeSourceLanguage,
+  normalizeTargetLanguage,
+  targetLanguageLabel,
+} from './languages';
 
 export type ImageEngine = 'local' | 'gemini_app';
 export type GeminiAppAuthMode = 'browser_session' | 'cookies_permission';
@@ -143,7 +149,8 @@ export type ExtensionSettings = {
 };
 
 export const defaultExtensionSettings: ExtensionSettings = {
-  sourceLang: 'ja',
+  // 条漫原文常常是英文/韩文，写死日文会让免费接口与提示词用错语种；默认按页面实测判断。
+  sourceLang: AUTO_SOURCE_LANGUAGE,
   targetLang: 'zh-CHS',
   imageEngine: 'local',
   geminiAppExperimentalEnabled: false,
@@ -164,15 +171,14 @@ export const defaultExtensionSettings: ExtensionSettings = {
   ocrEngine: 'paddleocr_v6_medium',
   processMode: 'translate',
   enableDebugLog: false,
-  autoTranslate: false,
+  // 打开页面即自动翻译视口内的图，不再需要逐张点击。
+  autoTranslate: true,
   simpleButtons: false,
   enableImageEditing: false,
   enableLlmOcrFilter: false,
 };
 
-export function targetLanguageLabel(targetLang: string): string {
-  return targetLang === 'zh-CHT' ? '繁体中文' : '简体中文';
-}
+export { targetLanguageLabel };
 
 export function buildGeminiImagePrompt(
   settings: Pick<ExtensionSettings, 'geminiAppPromptTemplate' | 'targetLang'>,
@@ -240,17 +246,11 @@ export function resolveGeminiApiImageModel(model: GeminiImageModel): string {
 }
 
 function normalizeTargetLang(value: unknown): string {
-  if (typeof value !== 'string') {
-    return defaultExtensionSettings.targetLang;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'zh-cht' || normalized === 'zh_tw' || normalized === 'zh-tw' || normalized === 'zh-hant') {
-    return 'zh-CHT';
-  }
-  if (normalized === 'zh-chs' || normalized === 'zh_cn' || normalized === 'zh-cn' || normalized === 'zh' || normalized === 'zh-hans') {
-    return 'zh-CHS';
-  }
-  return defaultExtensionSettings.targetLang;
+  return normalizeTargetLanguage(value, defaultExtensionSettings.targetLang);
+}
+
+function normalizeSourceLang(value: unknown): string {
+  return normalizeSourceLanguage(value, defaultExtensionSettings.sourceLang);
 }
 
 function normalizeProfileString(value: unknown, fallback: string): string {
@@ -428,7 +428,7 @@ export function normalizeSettings(value: unknown): ExtensionSettings {
     defaultExtensionSettings.geminiAppExperimentalEnabled,
   );
   return {
-    sourceLang: defaultExtensionSettings.sourceLang,
+    sourceLang: normalizeSourceLang(raw.sourceLang),
     targetLang: normalizeTargetLang(raw.targetLang),
     imageEngine: normalizeImageEngine(),
     geminiAppExperimentalEnabled,
@@ -551,7 +551,7 @@ export function validateSettings(settings: ExtensionSettings): string | null {
 export function toPipelineConfig(settings: ExtensionSettings): PipelineConfig {
   const profile = settings.llmProfiles[settings.llmProvider];
   return {
-    sourceLang: 'ja',
+    sourceLang: settings.sourceLang || AUTO_SOURCE_LANGUAGE,
     targetLang: settings.targetLang,
     translator: settings.translator,
     llmProvider: settings.llmProvider,

@@ -41,6 +41,13 @@ import { formatTypesetFont } from "./fontRuntime";
 export const horizontalLetterSpacingRatio = -0.05;
 export const horizontalLineHeightRatio = 0.93;
 
+/**
+ * 最小可读字号（画布像素）。低于该值的译文难以辨认：排版宁可让文字
+ * 向下溢出检测框、延伸到气泡/页面的空白区域，也不再继续缩小。
+ * 实际下限会被检测框高度截断（不超过原文高度），避免对噪声小框过度放大。
+ */
+export const horizontalMinReadableFontSize = 12;
+
 // ---------------------------------------------------------------------------
 // Horizontal layout
 // ---------------------------------------------------------------------------
@@ -524,13 +531,17 @@ export function computeFullHorizontalTypeset(
     });
   };
 
-  const buildCandidate = (fontSize: number): HorizontalCandidate => {
+  const buildCandidate = (
+    fontSize: number,
+    extraContentHeight = 0,
+  ): HorizontalCandidate => {
+    const baseContentHeight = resolveHorizontalContentHeight(contentHeight, fontSize);
     const horizontalContentHeight = resolveHorizontalMaskHeight(
       inputRegion.bubbleMask,
       expandedRegion,
-      resolveHorizontalContentHeight(contentHeight, fontSize),
+      baseContentHeight,
       fontSize,
-    );
+    ) + extraContentHeight;
     const preferredProfile = estimateHorizontalPreferredProfile(
       measureCtx,
       expandedRegion,
@@ -661,10 +672,37 @@ export function computeFullHorizontalTypeset(
   };
 
   let candidate = buildCandidate(estimatedInitialFontSize);
+  // 短译文落进大气泡时会明显偏小：初始字号取自原文（西文字高只有字号的
+  // 一半左右），中文方块字沿用同一个值就缩成气球中间的一小团。这里在
+  // 「当前字号已经放得下」的前提下向上二分，把字号撑到区域允许的最大值。
+  // 有源行几何信息时收紧上限，避免破坏对原版式的复刻。
+  const upscaleLimit = (() => {
+    const boundByHeight = Math.floor(contentHeight / 1.35);
+    const boundByRatio = Math.floor(estimatedInitialFontSize * (sourceGeometryProfile ? 1.25 : 2.2));
+    return Math.max(estimatedInitialFontSize, Math.min(boundByRatio, boundByHeight));
+  })();
+  if (candidateFits(candidate) && upscaleLimit > estimatedInitialFontSize) {
+    let lo = estimatedInitialFontSize + 1;
+    let hi = upscaleLimit;
+    let largestCandidate: HorizontalCandidate | undefined;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const current = buildCandidate(mid);
+      if (candidateFits(current)) {
+        largestCandidate = current;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (largestCandidate) {
+      candidate = largestCandidate;
+    }
+  }
   if (!candidateFits(candidate) && estimatedInitialFontSize > minFontSafetySize) {
     const minAllowed = Math.max(
       minFontSafetySize,
-      Math.ceil(estimatedInitialFontSize * 0.3),
+      Math.ceil(estimatedInitialFontSize * 0.5),
     );
     let lo = minAllowed;
     let hi = estimatedInitialFontSize - 1;
@@ -682,6 +720,35 @@ export function computeFullHorizontalTypeset(
       }
     }
     candidate = bestCandidate ?? smallestCandidate;
+  }
+
+  // 最小可读字号兜底：检测框过小或译文过长把字号压到可读下限以下时，
+  // 固定在下限字号（内容随后允许向下溢出检测框，见下方扩展逻辑）。
+  const minReadableFontSize = Math.max(
+    minFontSafetySize,
+    Math.min(horizontalMinReadableFontSize, Math.ceil(inputQuadDims.height)),
+  );
+  if (candidate.fontSize < minReadableFontSize) {
+    candidate = buildCandidate(minReadableFontSize);
+  }
+
+  // 溢出兜底：行总高超出内容区时（译文行数多于原文等），按实际行高向下
+  // 扩展内容高度——offscreen 画布随之变高，非旋转合成以 1:1 贴回原图，
+  // 文字向下延伸进气泡/页面空白区域，不会截断。旋转合成按 quad 等比
+  // 缩放，加高画布会等比缩小文字，因此旋转区域保持原行为。
+  // 源行锚定布局按原文几何逐行定位，同样不扩展。
+  {
+    const quad = expandedRegion.quad;
+    const axisAligned = !quad
+      || Math.abs(Math.atan2(quad[1].y - quad[0].y, quad[1].x - quad[0].x)) <= 0.052;
+    const linesExtent = candidate.lineBoxes.reduce(
+      (sum, line) => sum + line.visualHeight,
+      0,
+    ) + boxPadding;
+    const overflow = linesExtent - candidate.contentHeight;
+    if (axisAligned && !sourceLineLayoutEnabled && candidate.lineBoxes.length > 0 && overflow > 0) {
+      candidate = buildCandidate(candidate.fontSize, overflow);
+    }
   }
 
   const {

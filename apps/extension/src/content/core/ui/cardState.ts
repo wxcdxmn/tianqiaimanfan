@@ -29,7 +29,7 @@ export class CardStateController {
         stageTimingCardExpanded: expanded,
       });
     } catch (error) {
-      console.warn('[shinobu] 保存阶段明细展开状态失败', error);
+      console.warn('[tianqiaimanfan] 保存阶段明细展开状态失败', error);
     }
   }
 }

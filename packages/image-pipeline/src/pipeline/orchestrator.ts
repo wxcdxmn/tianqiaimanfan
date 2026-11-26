@@ -18,6 +18,8 @@ import {
   type PrecomputedTextDetection,
 } from './detect/precomputedDetection';
 import { runOcr } from "./ocr";
+import { isSiteWatermarkRegion } from "./ocr/watermark";
+import { expandOcrRetryBox, isUsableOcrRetry, MAX_OCR_RETRIES } from "./ocr/retry";
 import { preparePaddleOcrRuntime, warmupPaddleOcrRuntime } from "./ocr/paddleocrProvider";
 import { prepareInpaintSource, runInpaint, type PreparedInpaintSource } from "./inpaint";
 import { drawTypeset } from "./typeset";
@@ -704,6 +706,46 @@ export async function runPipeline(
 
   throwIfCancelled(signal);
   report(onProgress, "ocr", "OCR 日文识别");
+
+  /**
+   * 检测到但识别为空的框：向外扩张一点再识别一次。
+   * 只在空框数量合理时执行，异常页不会因此拖慢整页处理。
+   */
+  async function retryEmptyOcrRegions(): Promise<void> {
+    const emptyRegions = latestRegions.filter((region) => !region.sourceText.trim());
+    if (emptyRegions.length === 0 || emptyRegions.length > MAX_OCR_RETRIES) return;
+    const retryInputs = emptyRegions.map((region) => ({
+      ...region,
+      box: expandOcrRetryBox(region.box, image.naturalWidth, image.naturalHeight),
+    }));
+    try {
+      const retry = await runOcr(image, retryInputs, config.ocrEngine, platform, {
+        compactActiveBatch: config.ocrCompactActiveBatch,
+      }, modelRuntime);
+      const byId = new Map(retry.regions.map((region) => [region.id, region]));
+      let recovered = 0;
+      latestRegions = latestRegions.map((region) => {
+        const hit = byId.get(region.id);
+        if (!hit || !isUsableOcrRetry(hit.sourceText, hit.prob)) return region;
+        recovered += 1;
+        return {
+          ...region,
+          sourceText: hit.sourceText,
+          quad: hit.quad ?? region.quad,
+          prob: hit.prob ?? region.prob,
+          direction: hit.direction ?? region.direction,
+          fgColor: hit.fgColor ?? region.fgColor,
+          bgColor: hit.bgColor ?? region.bgColor,
+        };
+      });
+      if (recovered > 0) {
+        console.info(`[ocr] 空结果补识别: ${recovered}/${emptyRegions.length} 个框恢复出原文`);
+      }
+    } catch (error) {
+      console.warn("[ocr] 空结果补识别失败，忽略:", error instanceof Error ? error.message : error);
+    }
+  }
+
   try {
     if (!stopAfterOrder && inpaintRuntimeProbeSchedule === "ocr-start") {
       startInpaintRuntimeProbe();
@@ -719,11 +761,15 @@ export async function runPipeline(
     }, modelRuntime);
     throwIfCancelled(signal);
     latestRegions = ocrResult.regions;
+    // 检测到但读空的框（描边字/上伸部下伸部被裁）向外扩一点补识别一次，
+    // 读出来的结果写回同一 id，擦除仍用原始紧框。
+    await retryEmptyOcrRegions();
+    throwIfCancelled(signal);
     stageRegions.ocr = cloneTextRegions(latestRegions);
     ocrDebug = ocrResult.debug;
-    ocrCanvas = !collectStagePreviews || ocrResult.regions.length === 0
+    ocrCanvas = !collectStagePreviews || latestRegions.length === 0
       ? originalCanvas
-      : drawRegions(originalCanvas, ocrResult.regions, "OCR 识别", (region) => region.sourceText, platform);
+      : drawRegions(originalCanvas, latestRegions, "OCR 识别", (region) => region.sourceText, platform);
     cleanedCanvas = ocrCanvas;
     resultCanvas = cleanedCanvas;
     const ocrRuntime = getRuntimeStage("ocr");
@@ -784,7 +830,9 @@ export async function runPipeline(
   if (detectedBubbles.length > 0) {
     const matchResult = matchRegionsToBubbles(latestRegions, detectedBubbles);
     if (matchResult.unmatchedCount > 0) {
-      console.warn(
+      // Free-floating lettering (sound effects, narration) legitimately has no
+      // bubble; this is a diagnostic detail, not a failure.
+      console.debug(
         `[bubble] ${matchResult.unmatchedCount} 个文字区域未匹配到气泡:`,
         matchResult.unmatchedRegionIds,
       );
@@ -869,6 +917,25 @@ export async function runPipeline(
         label: "过滤 OCR 误识别",
         durationMs: performance.now() - t0,
       });
+    }
+  }
+
+  // 站点水印（域名、页顶细条标语）不该被翻译，也不该被擦除：
+  // 小字 OCR 译文往往残缺（如「MANGA18FX.COM」→「Rad Maga One Eg Fe」），
+  // 擦除渐变背景还容易留灰块。过滤后整段水印保持原样。
+  if (latestRegions.length > 0) {
+    const keptRegions: typeof latestRegions = [];
+    let watermarkCount = 0;
+    for (const region of latestRegions) {
+      if (isSiteWatermarkRegion(region, image.naturalWidth, image.naturalHeight)) {
+        watermarkCount += 1;
+      } else {
+        keptRegions.push(region);
+      }
+    }
+    if (watermarkCount > 0) {
+      latestRegions = keptRegions;
+      console.info(`[ocr] 跳过站点水印文字: ${watermarkCount} 个区域不翻译不擦除`);
     }
   }
 
@@ -1026,7 +1093,7 @@ export async function runPipeline(
     reportParallel();
     try {
       const t0 = performance.now();
-      const regionsWithText = orderedRegions.filter(r => r.sourceText.trim() !== '');
+      const regionsWithText = orderedRegions.filter(r => r.sourceText.trim() !== '' && !r.translationFailed);
       const refineResult = refineTextMask(originalCanvas, regionsWithText, detectionMaskCanvas, platform, {
         method: "fit_text",
         kernelSize: 3
@@ -1139,7 +1206,9 @@ export async function runPipeline(
     report(onProgress, "typeset", typesetLabel);
     try {
       const t0 = performance.now();
-      const typesetResult = await drawTypeset(cleanedCanvas, latestRegions, config.targetLang, {
+      // 翻译失败的区域既没擦除也不能重排，否则原文会被原生字覆盖出重影。
+      const typesetRegions = latestRegions.filter((region) => !region.translationFailed);
+      const typesetResult = await drawTypeset(cleanedCanvas, typesetRegions, config.targetLang, {
         debugMode: config.typesetDebug,
         renderText: true,
         collectDebugLog: false,
@@ -1151,7 +1220,7 @@ export async function runPipeline(
         resultCanvas = eraseDebugCanvas;
       }
       if (config.collectDebugLog) {
-        const debugOriginalTypeset = await drawTypeset(originalCanvas, latestRegions, config.targetLang, {
+        const debugOriginalTypeset = await drawTypeset(originalCanvas, typesetRegions, config.targetLang, {
           debugMode: true,
           renderText: false,
           collectDebugLog: true,

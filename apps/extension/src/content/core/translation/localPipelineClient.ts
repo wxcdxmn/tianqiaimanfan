@@ -97,7 +97,18 @@ export const runLocalDetectionProbe: RunLocalDetectionProbe = (file, options = {
   }
 
   const jobId = createJobId();
-  const port = runtime.connect(LOCAL_PIPELINE_CLIENT_PORT);
+  let port: ReturnType<typeof runtime.connect>;
+  try {
+    port = runtime.connect(LOCAL_PIPELINE_CLIENT_PORT);
+  } catch (error) {
+    // 扩展重载后旧页面的 connect 会直接抛 "Extension context invalidated"。
+    console.info('[tianqiaimanfan] 扩展已重新加载，请刷新页面');
+    return Promise.reject(new LocalPipelineRemoteError({
+      name: 'PipelineHostError',
+      code: 'PIPELINE_HOST_UNAVAILABLE',
+      message: error instanceof Error ? error.message : String(error),
+    }));
+  }
   return new Promise<TextDetectionProbeResult>((resolve, reject) => {
     let settled = false;
     let transferStarted = false;
@@ -261,7 +272,18 @@ export const runLocalPipeline: RunLocalPipeline = (file, config, onProgress, opt
   }
 
   const jobId = createJobId();
-  const port = runtime.connect(LOCAL_PIPELINE_CLIENT_PORT);
+  let port: ReturnType<typeof runtime.connect>;
+  try {
+    port = runtime.connect(LOCAL_PIPELINE_CLIENT_PORT);
+  } catch (error) {
+    // 扩展重载后旧页面的 connect 会直接抛 "Extension context invalidated"。
+    console.info('[tianqiaimanfan] 扩展已重新加载，请刷新页面');
+    return Promise.reject(new LocalPipelineRemoteError({
+      name: 'PipelineHostError',
+      code: 'PIPELINE_HOST_UNAVAILABLE',
+      message: error instanceof Error ? error.message : String(error),
+    }));
+  }
   const structuredCloneRequested = (globalThis as typeof globalThis & {
     __shinobuColdStartStructuredClone?: boolean;
   }).__shinobuColdStartStructuredClone === true;

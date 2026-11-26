@@ -24,6 +24,20 @@
       "mediaType": "application/octet-stream"
     },
     {
+      "id": "paddleocr-v5-korean",
+      "path": "korean_PP-OCRv5_mobile_rec.onnx",
+      "size": 13418787,
+      "sha256": "92f0b7785e64fc9090106a241cf4c1eb97472824558272751b88a2a4476d3a08",
+      "mediaType": "application/octet-stream"
+    },
+    {
+      "id": "paddleocr-v5-korean-dictionary",
+      "path": "korean_ppocr_v5_dict.txt",
+      "size": 47451,
+      "sha256": "a88071c68c01707489baa79ebe0405b7beb5cca229f4fc94cc3ef992328802d7",
+      "mediaType": "text/plain;charset=utf-8"
+    },
+    {
       "id": "paddleocr-v6-medium",
       "path": "PP-OCRv6_medium_rec.onnx",
       "size": 76554979,

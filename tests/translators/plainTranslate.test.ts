@@ -1,0 +1,362 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createTextTranslator } from '../../packages/text-translation/src/translator';
+import type { TextTranslationConfig } from '../../packages/text-translation/src/contracts';
+
+type PlainRequest = { text: string; from: string; to: string };
+
+function createConfig(overrides: Partial<TextTranslationConfig> = {}): TextTranslationConfig {
+  return {
+    sourceLang: 'ja',
+    targetLang: 'zh-CHS',
+    translator: 'google_web',
+    llmProvider: 'deepseek',
+    llmAuthMode: 'api_key',
+    llmBaseUrl: 'https://example.invalid',
+    llmModel: 'test-model',
+    ...overrides,
+  };
+}
+
+function createTransport(handler: (request: PlainRequest) => Promise<string>) {
+  const calls: PlainRequest[] = [];
+  return {
+    calls,
+    transport: {
+      requestChatCompletion: async () => {
+        throw new Error('不该走 LLM 通道');
+      },
+      translatePlain: async (request: PlainRequest) => {
+        calls.push({ text: request.text, from: request.from, to: request.to });
+        return handler(request);
+      },
+    },
+  };
+}
+
+function regionsOf(...texts: string[]) {
+  return texts.map((text, index) => ({
+    id: `r${index}`,
+    sourceText: text,
+    translatedText: '',
+  }));
+}
+
+describe('免费翻译通道的健壮性', () => {
+  it('按页面实测语言替换错误的 sourceLang', async () => {
+    const { transport, calls } = createTransport(async () => '译文');
+    const translator = createTextTranslator({ transport });
+
+    await translator.translateRegions({
+      regions: regionsOf(
+        "YOU SHOULD'VE SHOWED UP THE MOMENT I REGRESSED.",
+        'I told you to wait until I called for you.',
+      ),
+      config: createConfig({ sourceLang: 'ja' }),
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.from === 'en')).toBe(true);
+  });
+
+  it('日文页面继续沿用配置的 ja，不触发改写', async () => {
+    const { transport, calls } = createTransport(async () => '译文');
+    const translator = createTextTranslator({ transport });
+
+    await translator.translateRegions({
+      regions: regionsOf('お前はもう死んでいる', '何を言っているんだ'),
+      config: createConfig({ sourceLang: 'ja' }),
+    });
+
+    expect(calls.every((call) => call.from === 'ja')).toBe(true);
+  });
+
+  it('5xx 会重试，成功后正常返回译文', async () => {
+    let attempt = 0;
+    const { transport, calls } = createTransport(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error('Google 翻译请求失败: 503');
+      }
+      return '重试后的译文';
+    });
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('One single english line here.'),
+      config: createConfig(),
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(result.regions[0].translatedText).toBe('重试后的译文');
+    expect(result.regions[0].translationFailed).toBeUndefined();
+  });
+
+  it('单条失败不拖垮整页：失败区域标记 translationFailed 并保留原文', async () => {
+    const { transport } = createTransport(async (request) => {
+      if (request.text.includes('BROKEN')) {
+        throw new Error('Google 翻译请求失败: 400');
+      }
+      return `译:${request.text}`;
+    });
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('First good english line.', 'A BROKEN english line.', 'Third good english line.'),
+      config: createConfig(),
+    });
+
+    expect(result.regions.map((region) => region.translatedText)).toEqual([
+      '译:First good english line.',
+      '',
+      '译:Third good english line.',
+    ]);
+    expect(result.regions[1].translationFailed).toBe(true);
+    expect(result.regions[0].translationFailed).toBeUndefined();
+  });
+
+  it('全部失败时抛错，避免静默产出空页面', async () => {
+    const { transport } = createTransport(async () => {
+      throw new Error('Google 翻译请求失败: 400');
+    });
+    const translator = createTextTranslator({ transport });
+
+    await expect(
+      translator.translateRegions({
+        regions: regionsOf('Only one english line here.'),
+        config: createConfig(),
+      }),
+    ).rejects.toThrow(/翻译全部失败/);
+  });
+
+  it('免费通道限流耗尽时，自动改用已配置的 LLM 通道补翻', async () => {
+    const llmRequests: unknown[] = [];
+    const { transport } = createTransport(async () => {
+      throw new Error('Google 翻译请求失败: 429');
+    });
+    transport.requestChatCompletion = async (request) => {
+      llmRequests.push(request);
+      const userContent = (request.body.messages as Array<{ role: string; content: string }>)
+        .find((message) => message.role === 'user')!.content;
+      // 回显输入 id，模拟结构化翻译响应。
+      const payload = JSON.parse(userContent.match(/输入数据：(.+)$/u)?.[1] ?? '{}') as Array<{ id: string }>;
+      return {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              regions: payload.map((item) => ({ id: item.id, translation: `LLM:${item.id}` })),
+            }),
+          },
+        }],
+      };
+    };
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('First english line.', 'Second english line.'),
+      config: createConfig(),
+    });
+
+    expect(llmRequests).toHaveLength(1);
+    expect(result.regions.map((region) => region.translatedText)).toEqual([
+      'LLM:r0',
+      'LLM:r1',
+    ]);
+    expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
+  });
+
+  it('未配置 LLM（transport 拒绝）时保持原行为：限流耗尽抛错', async () => {
+    const { transport } = createTransport(async () => {
+      throw new Error('Google 翻译请求失败: 429');
+    });
+    transport.requestChatCompletion = async () => {
+      throw new Error('LLM 模式需要填写 API Key');
+    };
+    const translator = createTextTranslator({ transport });
+
+    await expect(
+      translator.translateRegions({
+        regions: regionsOf('Only one english line here.'),
+        config: createConfig(),
+      }),
+    ).rejects.toThrow(/翻译全部失败/);
+  });
+
+  it('部分免费失败时，用 LLM 补翻失败条目', async () => {
+    const { transport } = createTransport(async (request) => {
+      if (request.text.includes('BROKEN')) {
+        throw new Error('Google 翻译请求失败: 429');
+      }
+      return `译:${request.text}`;
+    });
+    transport.requestChatCompletion = async (request) => {
+      const userContent = (request.body.messages as Array<{ role: string; content: string }>)
+        .find((message) => message.role === 'user')!.content;
+      const payload = JSON.parse(userContent.match(/输入数据：(.+)$/u)?.[1] ?? '{}') as Array<{ id: string }>;
+      return {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              regions: payload.map((item) => ({ id: item.id, translation: `LLM:${item.id}` })),
+            }),
+          },
+        }],
+      };
+    };
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('A BROKEN english line.', 'Good english line.'),
+      config: createConfig(),
+    });
+
+    expect(result.regions[0].translatedText).toBe('LLM:r0');
+    expect(result.regions[1].translatedText).toBe('译:Good english line.');
+    expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
+  });
+
+  it('空文本区域不会发起请求', async () => {
+    const { transport, calls } = createTransport(async () => '译文');
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('', '   '),
+      config: createConfig(),
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
+  });
+
+  it('排队请求之间保持节流间隔', async () => {
+    const timestamps: number[] = [];
+    const { transport } = createTransport(async () => {
+      timestamps.push(Date.now());
+      return '译文';
+    });
+    const translator = createTextTranslator({ transport });
+
+    await translator.translateRegions({
+      regions: regionsOf('First english line here.', 'Second english line here.', 'Third english line here.'),
+      config: createConfig(),
+    });
+
+    expect(timestamps).toHaveLength(3);
+    for (let i = 1; i < timestamps.length; i += 1) {
+      expect(timestamps[i] - timestamps[i - 1]).toBeGreaterThanOrEqual(140);
+    }
+  });
+});
+
+describe('免费通道的调用顺序', () => {
+  it('保持输入顺序，避免译文与气泡错位', async () => {
+    const { transport } = createTransport(async (request) => `译:${request.text}`);
+    const translator = createTextTranslator({ transport });
+
+    const input = regionsOf('AAAA english text', 'BBBB english text');
+    const result = await translator.translateRegions({
+      regions: input,
+      config: createConfig(),
+    });
+
+    expect(result.regions.map((region) => region.id)).toEqual(['r0', 'r1']);
+    expect(result.regions[0].translatedText).toBe('译:AAAA english text');
+  });
+});
+
+type BatchRequest = { texts: readonly string[]; from: string; to: string };
+
+function createBatchTransport(
+  onBatch: (request: BatchRequest) => Promise<string[]>,
+  onSingle: (request: PlainRequest) => Promise<string>,
+) {
+  const batches: BatchRequest[] = [];
+  const singles: PlainRequest[] = [];
+  return {
+    batches,
+    singles,
+    transport: {
+      requestChatCompletion: async () => {
+        throw new Error('不该走 LLM 通道');
+      },
+      translatePlain: async (request: PlainRequest) => {
+        singles.push({ text: request.text, from: request.from, to: request.to });
+        return onSingle(request);
+      },
+      translatePlainBatch: async (request: BatchRequest) => {
+        batches.push({ texts: [...request.texts], from: request.from, to: request.to });
+        return onBatch(request);
+      },
+    },
+  };
+}
+
+describe('免费通道的合并翻译', () => {
+  it('整页合并成一次请求，返回顺序与输入一致', async () => {
+    const { transport, batches, singles } = createBatchTransport(
+      async (request) => request.texts.map((text) => `合:${text}`),
+      async (request) => `单:${request.text}`,
+    );
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf(
+        'First english line here.',
+        'Second english line here.',
+        'Third english line here.',
+      ),
+      config: createConfig(),
+    });
+
+    expect(batches).toHaveLength(1);
+    expect(singles).toHaveLength(0);
+    expect(result.regions.map((region) => region.translatedText)).toEqual([
+      '合:First english line here.',
+      '合:Second english line here.',
+      '合:Third english line here.',
+    ]);
+  });
+
+  it('合并失败时该组退回逐条，不影响整页', async () => {
+    const { transport, batches, singles } = createBatchTransport(
+      async () => {
+        throw new Error('合并翻译返回 2 行，期望 3 行');
+      },
+      async (request) => `单:${request.text}`,
+    );
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('First english line.', 'Second english line.', 'Third english line.'),
+      config: createConfig(),
+    });
+
+    expect(batches).toHaveLength(1);
+    expect(singles).toHaveLength(3);
+    expect(result.regions.every((region) => region.translatedText.startsWith('单:'))).toBe(true);
+  });
+
+  it('通道全部限流时快速失败，不逐条空转', async () => {
+    const { transport, singles } = createBatchTransport(
+      async () => {
+        throw new Error('合并失败');
+      },
+      async () => {
+        const error = new Error('免费翻译通道全部失败: Google: Google 翻译请求失败: 429') as Error & {
+          code?: string;
+        };
+        error.code = 'plain_throttled';
+        throw error;
+      },
+    );
+    const translator = createTextTranslator({ transport });
+
+    await expect(
+      translator.translateRegions({
+        regions: regionsOf('First english line.', 'Second english line.', 'Third english line.'),
+        config: createConfig(),
+      }),
+    ).rejects.toThrow(/翻译全部失败/);
+    // 第一条就判定为限流，后面两条不再发起请求。
+    expect(singles).toHaveLength(1);
+  });
+});

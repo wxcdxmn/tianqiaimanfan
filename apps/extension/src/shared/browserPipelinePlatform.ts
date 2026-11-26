@@ -7,6 +7,7 @@
  */
 
 import type {
+  ImageCrop,
   PipelineCanvas,
   PipelineFontDescriptors,
   PipelineImage,
@@ -112,8 +113,23 @@ export const browserPipelinePlatform: PipelinePlatform = {
     });
   },
 
-  createImageBitmap(image: PipelineImage): Promise<ImageBitmap> {
-    return globalThis.createImageBitmap(image as HTMLImageElement);
+  createImageBitmap(image: PipelineImage, crop?: ImageCrop): Promise<ImageBitmap> {
+    if (!crop) {
+      return globalThis.createImageBitmap(image as HTMLImageElement);
+    }
+    const surface = document.createElement('canvas');
+    surface.width = Math.max(1, Math.round(crop.width));
+    surface.height = Math.max(1, Math.round(crop.height));
+    const context = surface.getContext('2d', { alpha: false });
+    if (!context) {
+      throw new Error('创建切片画布失败');
+    }
+    context.drawImage(
+      image as CanvasImageSource,
+      crop.x, crop.y, crop.width, crop.height,
+      0, 0, surface.width, surface.height,
+    );
+    return globalThis.createImageBitmap(surface);
   },
 
   createImageData(width: number, height: number): PipelineImageData {

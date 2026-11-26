@@ -1,8 +1,8 @@
 {
   "default_locale": "en-US",
   "name": {
-    "en-US": "ShinobuTranslator",
-    "zh-CN": "ShinobuTranslator"
+    "en-US": "Tianqiaimanfan",
+    "zh-CN": "Tianqiaimanfan"
   },
   "categories": {
     "firefox": [
@@ -14,16 +14,16 @@
     "zh-CN": "翻译网页漫画和图片中的文字，支持截图翻译、本地 OCR、去字与排版。"
   },
   "description": {
-    "en-US": "ShinobuTranslator detects, recognizes, translates, removes, and typesets text inside images. Local image processing runs in the extension; configured translation providers receive only the data described in the privacy policy. Source: https://github.com/DonutShinobu/ShinobuTranslator Privacy: https://github.com/DonutShinobu/ShinobuTranslator/blob/master/PRIVACY_POLICY.md Support: https://github.com/DonutShinobu/ShinobuTranslator/issues",
-    "zh-CN": "ShinobuTranslator 可检测、识别、翻译、去字并重新排版网页图片中的文字。本地图片处理在扩展内完成；仅按隐私政策向用户配置的翻译服务发送所需数据。源码：https://github.com/DonutShinobu/ShinobuTranslator 隐私政策：https://github.com/DonutShinobu/ShinobuTranslator/blob/master/PRIVACY_POLICY.md 支持：https://github.com/DonutShinobu/ShinobuTranslator/issues"
+    "en-US": "Tianqiaimanfan detects, recognizes, translates, removes, and typesets text inside images. Local image processing runs in the extension; configured translation providers receive only the data described in the privacy policy. Source: https://github.com/DonutShinobu/Tianqiaimanfan Privacy: https://github.com/DonutShinobu/Tianqiaimanfan/blob/master/PRIVACY_POLICY.md Support: https://github.com/DonutShinobu/Tianqiaimanfan/issues",
+    "zh-CN": "Tianqiaimanfan 可检测、识别、翻译、去字并重新排版网页图片中的文字。本地图片处理在扩展内完成；仅按隐私政策向用户配置的翻译服务发送所需数据。源码：https://github.com/DonutShinobu/Tianqiaimanfan 隐私政策：https://github.com/DonutShinobu/Tianqiaimanfan/blob/master/PRIVACY_POLICY.md 支持：https://github.com/DonutShinobu/Tianqiaimanfan/issues"
   },
   "homepage": {
-    "en-US": "https://github.com/DonutShinobu/ShinobuTranslator",
-    "zh-CN": "https://github.com/DonutShinobu/ShinobuTranslator"
+    "en-US": "https://github.com/DonutShinobu/Tianqiaimanfan",
+    "zh-CN": "https://github.com/DonutShinobu/Tianqiaimanfan"
   },
   "support_url": {
-    "en-US": "https://github.com/DonutShinobu/ShinobuTranslator/issues",
-    "zh-CN": "https://github.com/DonutShinobu/ShinobuTranslator/issues"
+    "en-US": "https://github.com/DonutShinobu/Tianqiaimanfan/issues",
+    "zh-CN": "https://github.com/DonutShinobu/Tianqiaimanfan/issues"
   },
   "requires_payment": false,
   "version": {

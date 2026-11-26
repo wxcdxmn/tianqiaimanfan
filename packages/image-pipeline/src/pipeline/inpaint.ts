@@ -1,4 +1,9 @@
-import type { PlatformProvider, PipelineCanvas, PipelineImageData } from "../runtime/platform";
+import type {
+  ImageCrop,
+  PlatformProvider,
+  PipelineCanvas,
+  PipelineImageData,
+} from "../runtime/platform";
 import {
   isContextLostRuntimeError,
   type ModelRuntime,
@@ -57,18 +62,25 @@ function preprocessInpaintImage(
   normalize: InpaintInputNormalize,
   maskFill: InpaintMaskFill,
   platform: PlatformProvider,
+  crop?: ImageCrop,
 ): {
   image: TensorTransport;
   mask: TensorTransport;
   sourceRgba: Uint8ClampedArray;
   maskBinary: Float32Array;
 } {
+  const useCrop = crop
+    && (crop.x !== 0 || crop.y !== 0 || crop.width !== source.width || crop.height !== source.height);
   const imageCanvas = platform.createCanvas(size, size);
   const imageCtx = imageCanvas.getContext("2d", { willReadFrequently: true });
   if (!imageCtx) {
     throw new Error("去字 ONNX 图像预处理失败");
   }
-  imageCtx.drawImage(source, 0, 0, size, size);
+  if (useCrop) {
+    imageCtx.drawImage(source, crop!.x, crop!.y, crop!.width, crop!.height, 0, 0, size, size);
+  } else {
+    imageCtx.drawImage(source, 0, 0, size, size);
+  }
   const imageData = imageCtx.getImageData(0, 0, size, size).data;
 
   const maskCanvas = platform.createCanvas(size, size);
@@ -76,7 +88,11 @@ function preprocessInpaintImage(
   if (!maskCtx) {
     throw new Error("去字 ONNX 遮罩预处理失败");
   }
-  maskCtx.drawImage(mask, 0, 0, size, size);
+  if (useCrop) {
+    maskCtx.drawImage(mask, crop!.x, crop!.y, crop!.width, crop!.height, 0, 0, size, size);
+  } else {
+    maskCtx.drawImage(mask, 0, 0, size, size);
+  }
   const maskData = maskCtx.getImageData(0, 0, size, size).data;
 
   const area = size * size;
@@ -117,13 +133,41 @@ function preprocessInpaintImage(
   };
 }
 
-function readCanvasRgba(source: PipelineCanvas, width: number, height: number, platform: PlatformProvider): Uint8ClampedArray {
+/**
+ * Whether a crop rect already covers the whole source canvas.
+ *
+ * `crop` is always expressed in *source* coordinates, so the comparison must use
+ * the source size. Comparing against the destination size instead breaks the
+ * moment a band happens to be exactly as big as the destination (e.g. a 720×720
+ * first band of a 720×8439 strip): the whole strip then gets squashed into that
+ * one band and pasted back, which shows up as stretched, repeated artwork.
+ */
+export function cropCoversSource(
+  crop: ImageCrop | undefined,
+  source: { width: number; height: number },
+): boolean {
+  if (!crop) return true;
+  return crop.x === 0 && crop.y === 0
+    && crop.width === source.width && crop.height === source.height;
+}
+
+function readCanvasRgba(
+  source: PipelineCanvas,
+  width: number,
+  height: number,
+  platform: PlatformProvider,
+  crop?: ImageCrop,
+): Uint8ClampedArray {
   const canvas = platform.createCanvas(width, height);
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) {
     throw new Error("去字 ONNX 读取原图失败");
   }
-  ctx.drawImage(source, 0, 0, width, height);
+  if (cropCoversSource(crop, source)) {
+    ctx.drawImage(source, 0, 0, width, height);
+  } else {
+    ctx.drawImage(source, crop!.x, crop!.y, crop!.width, crop!.height, 0, 0, width, height);
+  }
   const data = ctx.getImageData(0, 0, width, height).data;
   return inpaintPixelFastPath() ? data : new Uint8ClampedArray(data);
 }
@@ -144,14 +188,27 @@ export function prepareInpaintSource(sourceCanvas: PipelineCanvas, platform: Pla
   };
 }
 
-function readMaskBinary(mask: PipelineCanvas, width: number, height: number, platform: PlatformProvider): Float32Array | Uint8Array {
-  const direct = inpaintDirectPixelFastPath() && mask.width === width && mask.height === height;
+function readMaskBinary(
+  mask: PipelineCanvas,
+  width: number,
+  height: number,
+  platform: PlatformProvider,
+  crop?: ImageCrop,
+): Float32Array | Uint8Array {
+  const direct = inpaintDirectPixelFastPath()
+    && mask.width === width && mask.height === height && cropCoversSource(crop, mask);
   const canvas = direct ? mask : platform.createCanvas(width, height);
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) {
     throw new Error("去字 ONNX 读取遮罩失败");
   }
-  if (!direct) ctx.drawImage(mask, 0, 0, width, height);
+  if (!direct) {
+    if (crop) {
+      ctx.drawImage(mask, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height);
+    } else {
+      ctx.drawImage(mask, 0, 0, width, height);
+    }
+  }
   const data = ctx.getImageData(0, 0, width, height).data;
   const out = inpaintPixelFastPath() ? new Uint8Array(width * height) : new Float32Array(width * height);
   for (let i = 0, p = 0; i < out.length; i += 1, p += 4) {
@@ -299,6 +356,7 @@ async function runInpaintByOnnx(
   platform: PlatformProvider,
   modelRuntime: ModelRuntime,
   preparedSource?: PreparedInpaintSource,
+  crop?: ImageCrop,
 ): Promise<InpaintResult> {
   const profile = (globalThis as typeof globalThis & {
     __shinobuColdStartInpaintProfile?: boolean;
@@ -321,7 +379,7 @@ async function runInpaintByOnnx(
     throw new Error("去字 ONNX 缺少有效 refined mask，已禁用文本框遮罩回退");
   }
   mark('setup');
-  const feeds = preprocessInpaintImage(originalCanvas, refinedMaskCanvas, size, normalize, maskFill, platform);
+  const feeds = preprocessInpaintImage(originalCanvas, refinedMaskCanvas, size, normalize, maskFill, platform, crop);
   mark('preprocess');
   const runWithHandle = async (handle: WorkerSessionHandle): Promise<Record<string, TensorTransport>> => {
     const imageName = handle.inputNames[0];
@@ -405,22 +463,24 @@ async function runInpaintByOnnx(
   }
   mark('decode');
 
-  const outputWidth = originalCanvas.width;
-  const outputHeight = originalCanvas.height;
-  const usablePreparedSource = preparedSource?.sourceCanvas === originalCanvas
+  const outputWidth = crop ? crop.width : originalCanvas.width;
+  const outputHeight = crop ? crop.height : originalCanvas.height;
+  // Whole-canvas snapshots only apply when we are not reading a sub-rectangle.
+  const usablePreparedSource = !crop
+    && preparedSource?.sourceCanvas === originalCanvas
     && preparedSource.width === outputWidth && preparedSource.height === outputHeight
     && preparedSource.rgba.length === outputWidth * outputHeight * 4
     && preparedSource.direct === inpaintDirectPixelFastPath()
     && (!preparedSource.direct || (preparedSource.imageData?.width === outputWidth
       && preparedSource.imageData.height === outputHeight && preparedSource.imageData.data === preparedSource.rgba))
     ? preparedSource : undefined;
-  const originalSourceImage = usablePreparedSource?.imageData ?? (inpaintDirectPixelFastPath()
+  const originalSourceImage = !crop && inpaintDirectPixelFastPath()
     ? readDirectCanvasImageData(originalCanvas, outputWidth, outputHeight)
-    : undefined);
+    : undefined;
   const originalSourceRgba = usablePreparedSource?.rgba ?? originalSourceImage?.data
-    ?? readCanvasRgba(originalCanvas, outputWidth, outputHeight, platform);
+    ?? readCanvasRgba(originalCanvas, outputWidth, outputHeight, platform, crop);
   mark('readOriginal');
-  const originalMaskBinary = readMaskBinary(refinedMaskCanvas, outputWidth, outputHeight, platform);
+  const originalMaskBinary = readMaskBinary(refinedMaskCanvas, outputWidth, outputHeight, platform, crop);
   mark('readMask');
   const inpaintedRgbaAtOriginalSize = resizeRgba(inpaintedRgba, size, size, outputWidth, outputHeight, platform);
   mark('resize');
@@ -440,6 +500,139 @@ async function runInpaintByOnnx(
   return { canvas, actualProvider, actualWebnnDeviceType };
 }
 
+/**
+ * Height/width ratio above which the page is erased band by band.
+ *
+ * The inpaint model works on a 512² canvas. Squeezing a 720×8439 webtoon strip
+ * whole into that input makes one model pixel cover ~16×16 source pixels, so
+ * erased lettering turns into smeared blocks. Banding keeps the erased region
+ * at (nearly) native resolution.
+ */
+export const INPAINT_TILE_TRIGGER_ASPECT = 2.2;
+
+/** Coarse row projection of the refined mask, used to skip empty bands cheaply. */
+function buildMaskRowIndex(
+  maskCanvas: PipelineCanvas,
+  platform: PlatformProvider,
+  width: number,
+  height: number,
+  scale = 8,
+): { rows: Uint8Array; scale: number } {
+  const pw = Math.max(1, Math.round(width / scale));
+  const ph = Math.max(1, Math.round(height / scale));
+  const canvas = platform.createCanvas(pw, ph);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    return { rows: new Uint8Array(0), scale };
+  }
+  ctx.drawImage(maskCanvas, 0, 0, pw, ph);
+  const data = ctx.getImageData(0, 0, pw, ph).data;
+  const rows = new Uint8Array(ph);
+  for (let y = 0; y < ph; y += 1) {
+    const rowStart = y * pw * 4;
+    for (let x = 0; x < pw; x += 1) {
+      if (data[rowStart + x * 4] > 96) {
+        rows[y] = 1;
+        break;
+      }
+    }
+  }
+  return { rows, scale };
+}
+
+function bandHasMask(
+  index: { rows: Uint8Array; scale: number },
+  y: number,
+  height: number,
+): boolean {
+  if (index.rows.length === 0) return true;
+  const start = Math.max(0, Math.floor(y / index.scale));
+  const end = Math.min(index.rows.length, Math.ceil((y + height) / index.scale));
+  // Include one row either side so a band edge never drops its only evidence.
+  for (let row = Math.max(0, start - 1); row < Math.min(index.rows.length, end + 1); row += 1) {
+    if (index.rows[row] === 1) return true;
+  }
+  return false;
+}
+
+/** Split a tall canvas into overlapping erasing bands. */
+export function planInpaintBands(
+  width: number,
+  height: number,
+  bandHeight: number,
+  overlapRatio = 0.15,
+): ImageCrop[] {
+  const safeWidth = Math.max(1, Math.round(width));
+  const safeHeight = Math.max(1, Math.round(height));
+  const safeBand = Math.min(safeHeight, Math.max(1, Math.round(bandHeight)));
+  const stride = Math.max(1, Math.round(safeBand * (1 - Math.min(0.4, Math.max(0, overlapRatio)))));
+  const bands: ImageCrop[] = [];
+  for (let y = 0; y < safeHeight; y += stride) {
+    bands.push({
+      x: 0,
+      y,
+      width: safeWidth,
+      height: Math.min(safeBand, safeHeight - y),
+    });
+    if (y + safeBand >= safeHeight) break;
+  }
+  return bands;
+}
+
+async function runInpaintByOnnxTiled(
+  originalCanvas: PipelineCanvas,
+  refinedMaskCanvas: PipelineCanvas,
+  platform: PlatformProvider,
+  modelRuntime: ModelRuntime,
+): Promise<InpaintResult> {
+  const model = await modelRuntime.readModel("inpaint");
+  const size = model.input?.[0] ?? 512;
+  const width = originalCanvas.width;
+  const height = originalCanvas.height;
+
+  // A square band keeps the model's scale factor uniform in both axes.
+  const bandHeight = Math.min(height, Math.max(size, width));
+  const bands = planInpaintBands(width, height, bandHeight);
+
+  const outCanvas = platform.createCanvas(width, height);
+  const outCtx = outCanvas.getContext("2d");
+  if (!outCtx) {
+    throw new Error("去字分带拼接画布创建失败");
+  }
+  outCtx.drawImage(originalCanvas, 0, 0);
+
+  const rowIndex = buildMaskRowIndex(refinedMaskCanvas, platform, width, height);
+  let actualProvider: RuntimeProvider = "wasm";
+  let actualWebnnDeviceType: WebNnDeviceType | undefined;
+  let erasedBands = 0;
+  let skippedBands = 0;
+
+  for (const crop of bands) {
+    if (!bandHasMask(rowIndex, crop.y, crop.height)) {
+      skippedBands += 1;
+      continue;
+    }
+    const result = await runInpaintByOnnx(
+      originalCanvas,
+      refinedMaskCanvas,
+      platform,
+      modelRuntime,
+      undefined,
+      crop,
+    );
+    outCtx.drawImage(result.canvas, 0, crop.y);
+    actualProvider = result.actualProvider ?? actualProvider;
+    actualWebnnDeviceType = result.actualWebnnDeviceType ?? actualWebnnDeviceType;
+    erasedBands += 1;
+  }
+
+  console.log(
+    `[inpaint] 长条图分带擦除: ${width}x${height} → ${erasedBands} 带已擦除, ${skippedBands} 带跳过 `
+    + `(带高 ${bandHeight})`
+  );
+  return { canvas: outCanvas, actualProvider, actualWebnnDeviceType };
+}
+
 export async function runInpaint(
   originalCanvas: PipelineCanvas,
   refinedMaskCanvas: PipelineCanvas,
@@ -447,5 +640,10 @@ export async function runInpaint(
   modelRuntime: ModelRuntime,
   preparedSource?: PreparedInpaintSource,
 ): Promise<InpaintResult> {
+  const { width, height } = originalCanvas;
+  const maskMatchesCanvas = refinedMaskCanvas.width === width && refinedMaskCanvas.height === height;
+  if (maskMatchesCanvas && height / Math.max(1, width) > INPAINT_TILE_TRIGGER_ASPECT) {
+    return runInpaintByOnnxTiled(originalCanvas, refinedMaskCanvas, platform, modelRuntime);
+  }
   return runInpaintByOnnx(originalCanvas, refinedMaskCanvas, platform, modelRuntime, preparedSource);
 }

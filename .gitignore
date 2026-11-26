@@ -62,7 +62,18 @@ public/models/*
 !public/models/ocr_dict.txt
 !public/models/paddleocr_v5_dict.txt
 !public/models/paddleocr_v6_dict.txt
+!public/models/korean_ppocr_v5_dict.txt
 *.onnx
+*.ort
+
+# Extension-level public assets (large, download separately)
+apps/extension/public/fonts/*
+apps/extension/public/ort/*
+apps/extension/public/models/*
+!apps/extension/public/models/models.json
+!apps/extension/public/models/korean_ppocr_v5_dict.txt
+!apps/extension/public/models/paddleocr_v6_dict.txt
+!apps/extension/public/models/paddleocr_v5_dict.txt
 
 # Test/output images (large files)
 测试图片.png

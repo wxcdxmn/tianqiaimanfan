@@ -1,5 +1,5 @@
 import type { Rect, TextRegion, QuadPoint } from "../../types";
-import type { PlatformProvider, PipelineCanvas, PipelineImage } from "../../runtime/platform";
+import type { ImageCrop, PlatformProvider, PipelineCanvas, PipelineImage } from "../../runtime/platform";
 import { minAreaRect, type Quad } from "../typeset/geometry";
 import {
   isContextLostRuntimeError,
@@ -12,6 +12,7 @@ import {
 import { toErrorMessage } from '../../errorMessage';
 import { clamp, polygonArea, nmsBoxes, type ScoredBox } from "../utils";
 import { tryNativeOpaqueMaskThreshold } from "../image";
+import { planImageTiles, offsetRegions, dedupeTiledRegions, type TilePlanOptions } from "./tiling";
 
 type LetterboxResult = {
   input: Float32Array;
@@ -499,9 +500,14 @@ function boxesFromBlk(
   return picked;
 }
 
-function preprocessLetterbox(image: PipelineImage, size: number, platform: PlatformProvider): LetterboxResult {
-  const width = image.naturalWidth;
-  const height = image.naturalHeight;
+function preprocessLetterbox(
+  image: PipelineImage,
+  size: number,
+  platform: PlatformProvider,
+  crop?: ImageCrop
+): LetterboxResult {
+  const width = crop ? crop.width : image.naturalWidth;
+  const height = crop ? crop.height : image.naturalHeight;
   const ratio = Math.min(size / height, size / width);
   const unpaddedWidth = Math.max(1, Math.round(width * ratio));
   const unpaddedHeight = Math.max(1, Math.round(height * ratio));
@@ -513,7 +519,15 @@ function preprocessLetterbox(image: PipelineImage, size: number, platform: Platf
   }
   ctx.fillStyle = "black";
   ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(image, 0, 0, unpaddedWidth, unpaddedHeight);
+  if (crop) {
+    ctx.drawImage(
+      image,
+      crop.x, crop.y, crop.width, crop.height,
+      0, 0, unpaddedWidth, unpaddedHeight
+    );
+  } else {
+    ctx.drawImage(image, 0, 0, unpaddedWidth, unpaddedHeight);
+  }
 
   const data = ctx.getImageData(0, 0, size, size).data;
   const input = new Float32Array(1 * 3 * size * size);
@@ -794,12 +808,54 @@ function mapBoxesToOriginal(
 
 // --- Main ONNX detection function (exported) ---
 
-export async function detectByOnnx(
+/** Dimensions-only stand-in used to map frame-local coordinates back to a crop. */
+function frameImage(width: number, height: number): PipelineImage {
+  return {
+    src: "",
+    naturalWidth: width,
+    naturalHeight: height,
+    onload: null,
+    onerror: null,
+  } as PipelineImage;
+}
+
+async function createSourceBitmap(
+  image: PipelineImage,
+  platform: PlatformProvider,
+  crop?: ImageCrop
+): Promise<ImageBitmap> {
+  if (platform.createImageBitmap) {
+    return platform.createImageBitmap(image, crop);
+  }
+  if (!crop) {
+    return createImageBitmap(image as HTMLImageElement);
+  }
+  const surface = platform.createCanvas(crop.width, crop.height);
+  const ctx = surface.getContext("2d");
+  if (!ctx) {
+    throw new Error("创建切片位图失败");
+  }
+  ctx.drawImage(
+    image,
+    crop.x, crop.y, crop.width, crop.height,
+    0, 0, crop.width, crop.height
+  );
+  return createImageBitmap(surface as unknown as HTMLCanvasElement);
+}
+
+/**
+ * Run the detector on a single frame. When `crop` is provided the network only
+ * sees that sub-rectangle, but every returned coordinate stays relative to the
+ * crop (the tile). Callers stitch tiles together with `detectByOnnxTiled`.
+ */
+async function detectOnnxFrame(
   image: PipelineImage,
   platform: PlatformProvider,
   modelRuntime: ModelRuntime,
   onSubmitted?: () => void,
+  crop?: ImageCrop,
 ): Promise<DetectOutput> {
+  const frame = crop ? frameImage(crop.width, crop.height) : image;
   const primaryHandle = await modelRuntime.getSession("detector");
   const inputSize = 1024;
 
@@ -812,9 +868,7 @@ export async function detectByOnnx(
   // WebGPU path: GPU preprocess + IO binding
   if (primaryHandle.provider === "webgpu") {
     try {
-      const imageBitmap = platform.createImageBitmap
-        ? await platform.createImageBitmap(image)
-        : await createImageBitmap(image as HTMLImageElement);
+      const imageBitmap = await createSourceBitmap(image, platform, crop);
       const gpuResult = await modelRuntime.runImage(primaryHandle.sessionId, imageBitmap, onSubmitted);
       prep = {
         input: new Float32Array(0), // not needed for GPU path
@@ -828,7 +882,7 @@ export async function detectByOnnx(
       const message = toErrorMessage(error);
       console.warn(`[detector] WebGPU GPU预处理失败，回退到 CPU: ${message}`);
       // Fallback: try WebNN first, then WASM (matching original fallback order)
-      prep = preprocessLetterbox(image, inputSize, platform);
+      prep = preprocessLetterbox(image, inputSize, platform, crop);
 
       const fallbackPlans: RuntimeProvider[][] = [["webnn", "wasm"], ["wasm"]];
       let recovered = false;
@@ -861,7 +915,7 @@ export async function detectByOnnx(
     }
   } else {
     // CPU path (webnn/wasm): existing letterbox preprocessing
-    prep = preprocessLetterbox(image, inputSize, platform);
+    prep = preprocessLetterbox(image, inputSize, platform, crop);
 
     const runWithHandle = async (handle: WorkerSessionHandle): Promise<Record<string, TensorTransport>> => {
       const inputName = handle.inputNames[0] ?? "images";
@@ -916,7 +970,7 @@ export async function detectByOnnx(
   const detTensor = pickDetTensor(outputTensors);
   if (detTensor) {
     const regionT0 = performance.now();
-    const regions = detectCtdRegionsFromDetTensor(detTensor, image, prep);
+    const regions = detectCtdRegionsFromDetTensor(detTensor, frame, prep);
     markDetectorPostprocess('detector.ctd-regions', regionT0);
 
     let maskTensor: TensorTransport = detTensor;
@@ -936,7 +990,7 @@ export async function detectByOnnx(
 
     return {
       regions,
-      rawMaskCanvas: buildMaskCanvasFromBinary(binaryMask.mask, binaryMask.width, binaryMask.height, image, platform),
+      rawMaskCanvas: buildMaskCanvasFromBinary(binaryMask.mask, binaryMask.width, binaryMask.height, frame, platform),
       actualProvider,
       actualWebnnDeviceType
     };
@@ -948,13 +1002,12 @@ export async function detectByOnnx(
     if (blkBoxes.length > 0) {
       const mapped = mapBoxesToOriginal(
         blkBoxes.map((item) => item.box),
-        image,
+        frame,
         prep,
         0.08,
         0.1
       )
-        .filter((box) => box.width / Math.max(1, box.height) <= 1.8)
-        .filter((box) => box.width <= image.naturalWidth * 0.35 && box.height <= image.naturalHeight * 0.45)
+        .filter((box) => isPlausibleTextBox(box, frame.naturalWidth, frame.naturalHeight))
         .sort((a, b) => b.width * b.height - a.width * a.height)
         .slice(0, 72)
         .sort((a, b) => a.y - b.y || a.x - b.x);
@@ -979,10 +1032,9 @@ export async function detectByOnnx(
   const { mask, width, height } = binaryMask;
 
   const boxes1024 = connectedComponents(mask, width, height);
-  const mapped = mapBoxesToOriginal(boxes1024, image, prep, 0.05, 0.08);
+  const mapped = mapBoxesToOriginal(boxes1024, frame, prep, 0.05, 0.08);
   const merged = mergeRects(mapped, 5)
-    .filter((box) => box.width / Math.max(1, box.height) <= 1.8)
-    .filter((box) => box.width <= image.naturalWidth * 0.35 && box.height <= image.naturalHeight * 0.45)
+    .filter((box) => isPlausibleTextBox(box, frame.naturalWidth, frame.naturalHeight))
     .sort((a, b) => b.width * b.height - a.width * a.height)
     .slice(0, 64)
     .sort((a, b) => a.y - b.y || a.x - b.x);
@@ -994,8 +1046,142 @@ export async function detectByOnnx(
   const regions = merged.map(makeRegion);
   return {
     regions,
-    rawMaskCanvas: buildMaskCanvasFromBinary(mask, width, height, image, platform),
+    rawMaskCanvas: buildMaskCanvasFromBinary(mask, width, height, frame, platform),
     actualProvider,
     actualWebnnDeviceType
   };
+}
+
+// --- Detected box plausibility ---
+
+/**
+ * 判断一个检测框像不像「文字」而不是整块分镜。
+ *
+ * 原来的规则是 `宽高比 ≤ 1.8 且宽度 ≤ 页宽 35%`，这套阈值是按日漫单页双栏调出来的。
+ * 条漫里一整行英文对白常有 400×40 这种又宽又扁的形状（宽高比 10、宽度 55%），
+ * 会被当成误检丢掉——表现就是"气泡里有一行字没翻"。这里补一条放行规则：
+ * 又薄又宽（高度很小）的框按单行文字接受，整块分镜因为高度大仍然会被拦掉。
+ */
+export function isPlausibleTextBox(
+  box: { width: number; height: number },
+  frameWidth: number,
+  frameHeight: number,
+): boolean {
+  const width = Math.max(1, box.width);
+  const height = Math.max(1, box.height);
+  const aspect = width / height;
+
+  // 常见文字块：多行堆叠，宽高比不大。
+  if (aspect <= 1.8 && width <= frameWidth * 0.35 && height <= frameHeight * 0.45) {
+    return true;
+  }
+  // 单行宽文字：高度只占很小一部分，宽度可以放到页宽的 80%。
+  if (height <= frameHeight * 0.08 && width <= frameWidth * 0.8 && aspect <= 22) {
+    return true;
+  }
+  return false;
+}
+
+// --- Tiled detection (webtoon long strips) ---
+
+export {
+  planImageTiles,
+  offsetRegions,
+  dedupeTiledRegions,
+  dedupeTiledBoxes,
+  boxOverlapRatio,
+  DEFAULT_TILE_MAX_ASPECT,
+  DEFAULT_TILE_OVERLAP,
+  DEFAULT_MAX_TILES,
+  TILE_TRIGGER_ASPECT,
+  type TilePlan,
+  type TilePlanOptions,
+} from './tiling';
+
+function composeTileMask(
+  image: PipelineImage,
+  tiles: ImageCrop[],
+  masks: Array<PipelineCanvas | null>,
+  platform: PlatformProvider
+): PipelineCanvas | null {
+  const usable = masks.filter((mask): mask is PipelineCanvas => mask !== null);
+  if (usable.length === 0) return null;
+  const canvas = platform.createCanvas(image.naturalWidth, image.naturalHeight);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  for (let i = 0; i < tiles.length; i += 1) {
+    const mask = masks[i];
+    if (!mask) continue;
+    ctx.drawImage(mask, 0, tiles[i].y);
+  }
+  return canvas;
+}
+
+/**
+ * Detect text on an arbitrarily tall image by slicing it into overlapping
+ * bands. Short pages take the single-frame path with zero overhead.
+ */
+export async function detectByOnnxTiled(
+  image: PipelineImage,
+  platform: PlatformProvider,
+  modelRuntime: ModelRuntime,
+  onSubmitted?: () => void,
+  options: TilePlanOptions = {},
+): Promise<DetectOutput> {
+  const plan = planImageTiles(image.naturalWidth, image.naturalHeight, options);
+  if (!plan.tiled) {
+    return detectOnnxFrame(image, platform, modelRuntime, onSubmitted);
+  }
+
+  const tiles = plan.tiles;
+  console.log(
+    `[detector] 长条图切片检测: ${image.naturalWidth}x${image.naturalHeight} → ${tiles.length} 片 `
+    + `(片高 ${tiles[0].height}, 重叠 ${Math.round((1 - (tiles[1].y - tiles[0].y) / tiles[0].height) * 100)}%)`
+  );
+  const collected: TextRegion[] = [];
+  const masks: Array<PipelineCanvas | null> = [];
+  let lastProvider: RuntimeProvider | undefined;
+  let lastWebnnDeviceType: WebNnDeviceType | undefined;
+  let sawMask = false;
+
+  for (const tile of tiles) {
+    try {
+      const frame = await detectOnnxFrame(image, platform, modelRuntime, onSubmitted, tile);
+      collected.push(...offsetRegions(frame.regions, tile.y));
+      lastProvider = frame.actualProvider ?? lastProvider;
+      lastWebnnDeviceType = frame.actualWebnnDeviceType ?? lastWebnnDeviceType;
+      masks.push(frame.rawMaskCanvas);
+      if (frame.rawMaskCanvas) sawMask = true;
+    } catch (error) {
+      // A single bad band must not lose the rest of the chapter.
+      console.warn(`[detector] 切片检测失败 (y=${tile.y} h=${tile.height}): ${toErrorMessage(error)}`);
+      masks.push(null);
+    }
+  }
+
+  const regions = dedupeTiledRegions(collected);
+  console.log(
+    `[detector] 切片检测完成: ${tiles.length} 片 → ${collected.length} 个原始框, 去重后 ${regions.length} 个文本区域`
+  );
+  return {
+    regions,
+    rawMaskCanvas: sawMask ? composeTileMask(image, tiles, masks, platform) : null,
+    actualProvider: lastProvider,
+    actualWebnnDeviceType: lastWebnnDeviceType,
+  };
+}
+
+/** Single-frame entry point kept for callers that already control framing. */
+export async function detectByOnnx(
+  image: PipelineImage,
+  platform: PlatformProvider,
+  modelRuntime: ModelRuntime,
+  onSubmitted?: () => void,
+  crop?: ImageCrop,
+): Promise<DetectOutput> {
+  if (!crop) {
+    return detectByOnnxTiled(image, platform, modelRuntime, onSubmitted);
+  }
+  const result = await detectOnnxFrame(image, platform, modelRuntime, onSubmitted, crop);
+  return { ...result, regions: offsetRegions(result.regions, crop.y) };
 }

@@ -9,13 +9,15 @@ import {
   fillMissingOcrFields,
 } from "./provider";
 import type { OcrRecognizeResult } from "./provider";
-import { paddleocrV6MediumProvider } from "./paddleocrProvider";
+import { paddleocrV6MediumProvider, paddleocrV5KoreanProvider } from "./paddleocrProvider";
 
 registerOcrProvider(paddleocrV6MediumProvider);
+registerOcrProvider(paddleocrV5KoreanProvider);
 registerOcrProviderAlias("builtin", "paddleocr_v6_medium");
 registerOcrProviderAlias("48px", "paddleocr_v6_medium");
 registerOcrProviderAlias("paddleocr", "paddleocr_v6_medium");
 registerOcrProviderAlias("paddleocr_v6_small", "paddleocr_v6_medium");
+registerOcrProviderAlias("korean", "paddleocr_v5_korean");
 
 export type OcrResult = {
   regions: TextRegion[];
@@ -113,7 +115,93 @@ function normalizeOcrProviderName(providerName?: string): string {
   ) {
     return "paddleocr_v6_medium";
   }
+  if (providerName === "korean" || providerName === "paddleocr_v5_korean") {
+    return "paddleocr_v5_korean";
+  }
   return providerName;
+}
+
+/**
+ * 源语言门控：默认识别模型（PP-OCRv6）的词典不含谚文，韩文页会整页读空。
+ * 整页 OCR 时先用少量最大区域对默认模型与韩文模型各采样一次，
+ * 韩文模型输出谚文占比高且置信度更高时整页改用韩文模型；其余语言维持原行为。
+ */
+const KOREAN_GATE_MIN_REGIONS = 4;
+const KOREAN_GATE_SAMPLE_SIZE = 10;
+const KOREAN_GATE_HANGUL_SHARE = 0.2;
+
+type GateModel = "paddleocr_v6_medium" | "paddleocr_v5_korean";
+
+/** 整页门控的最近决策；识别失败补翻等少区域调用沿用同一决策，避免每页重复采样。 */
+let lastAutoOcrModel: GateModel | null = null;
+
+export function resetOcrLanguageGate(): void {
+  lastAutoOcrModel = null;
+}
+
+function meanConfidence(results: Array<{ confidence?: number }>): number {
+  if (results.length === 0) return 0;
+  const sum = results.reduce((total, result) => total + (result.confidence ?? 0), 0);
+  return sum / results.length;
+}
+
+function hangulShareOf(texts: readonly string[]): number {
+  let hangul = 0;
+  let total = 0;
+  for (const text of texts) {
+    for (const char of text) {
+      if (/\s/u.test(char)) continue;
+      total += 1;
+      const code = char.codePointAt(0) ?? 0;
+      if ((code >= 0xac00 && code <= 0xd7a3) || (code >= 0x1100 && code <= 0x11ff)) {
+        hangul += 1;
+      }
+    }
+  }
+  return total < 8 ? 0 : hangul / total;
+}
+
+async function resolveOcrModelByLanguage(
+  image: PipelineImage,
+  detectedRegions: TextRegion[],
+  platform: PlatformProvider,
+  modelRuntime: ModelRuntime,
+): Promise<{ model: GateModel; gate?: NonNullable<OcrRunDebugInfo["languageGate"]> }> {
+  const koreanProvider = getOcrProvider("paddleocr_v5_korean");
+  const mediumProvider = getOcrProvider("paddleocr_v6_medium");
+  if (!koreanProvider || !mediumProvider) {
+    return { model: "paddleocr_v6_medium" };
+  }
+  const sample = [...detectedRegions]
+    .sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height)
+    .slice(0, KOREAN_GATE_SAMPLE_SIZE);
+  try {
+    const mediumOutput = await mediumProvider.recognize(image, sample, platform, modelRuntime);
+    const koreanOutput = await koreanProvider.recognize(image, sample, platform, modelRuntime);
+    const mediumConfidence = meanConfidence(mediumOutput.results);
+    const koreanConfidence = meanConfidence(koreanOutput.results);
+    const hangulShare = hangulShareOf(koreanOutput.results.map((result) => result.text));
+    // 韩文页：韩文模型读出谚文且明显更自信；默认模型对谚文只会输出乱码。
+    // 日文/中文页：韩文模型词典里没有假名/汉字，只能输出低置信度乱码，比较后仍用默认模型。
+    const chooseKorean = hangulShare >= KOREAN_GATE_HANGUL_SHARE && koreanConfidence > mediumConfidence;
+    const model: GateModel = chooseKorean ? "paddleocr_v5_korean" : "paddleocr_v6_medium";
+    return {
+      model,
+      gate: {
+        sampleRegionCount: sample.length,
+        hangulShare,
+        mediumMeanConfidence: mediumConfidence,
+        koreanMeanConfidence: koreanConfidence,
+        chosen: model,
+      },
+    };
+  } catch (error) {
+    console.warn(
+      "[ocr] 源语言采样失败，使用默认识别模型:",
+      error instanceof Error ? error.message : error,
+    );
+    return { model: "paddleocr_v6_medium" };
+  }
 }
 
 export async function runOcr(
@@ -129,12 +217,35 @@ export async function runOcr(
   }
 
   const providerNameResolved = normalizeOcrProviderName(providerName);
-  const provider = getOcrProvider(providerNameResolved);
-  if (!provider) throw new Error(`OCR 引擎未注册: ${providerNameResolved}`);
 
   if (!modelRuntime) {
     throw new Error('OCR 需要 ModelRuntime');
   }
+
+  let effectiveProviderName = providerNameResolved;
+  let languageGate: OcrRunDebugInfo["languageGate"];
+  if (providerNameResolved === "paddleocr_v6_medium") {
+    if (detectedRegions.length >= KOREAN_GATE_MIN_REGIONS) {
+      // 整页调用：重新采样决策（每页语言可能不同）。
+      const decision = await resolveOcrModelByLanguage(image, detectedRegions, platform, modelRuntime);
+      lastAutoOcrModel = decision.model;
+      effectiveProviderName = decision.model;
+      languageGate = decision.gate;
+      if (decision.gate && decision.model === "paddleocr_v5_korean") {
+        console.info(
+          `[ocr] 检测到韩文页面，整页改用韩文识别模型（谚文占比 ${(decision.gate.hangulShare * 100).toFixed(0)}%，`
+          + `置信度 ${decision.gate.mediumMeanConfidence.toFixed(2)} → ${decision.gate.koreanMeanConfidence.toFixed(2)}）`,
+        );
+      }
+    } else if (lastAutoOcrModel) {
+      // 少区域调用（失败补翻等）：沿用本页整页决策。
+      effectiveProviderName = lastAutoOcrModel;
+    }
+  }
+
+  const provider = getOcrProvider(effectiveProviderName);
+  if (!provider) throw new Error(`OCR 引擎未注册: ${effectiveProviderName}`);
+
   const output = await provider.recognize(
     image,
     detectedRegions,
@@ -150,6 +261,9 @@ export async function runOcr(
     detectedRegions,
     colorFillMs
   );
+  if (languageGate) {
+    debug.languageGate = languageGate;
+  }
   const regions = mapResultsToRegions(filled, detectedRegions);
   return {
     regions,

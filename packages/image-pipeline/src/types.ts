@@ -71,6 +71,8 @@ export type TextRegion = {
   originalLineCount?: number;
   sourceText: string;
   translatedText: string;
+  /** 翻译失败：保留原文，下游不做擦除与重排。 */
+  translationFailed?: boolean;
   /** Optional LLM-provided vertical columns, ordered right-to-left. */
   translatedColumns?: string[];
   /** Pre-merge source line/column geometries in reading order. */
@@ -316,6 +318,14 @@ export type OcrRunDebugInfo = {
   totalSessionRunCount: number;
   totalSessionRunMs: number;
   paddle?: PaddleOcrRunDebug;
+  /** 源语言门控（韩文自动识别）的采样结果，仅整页 OCR 时记录。 */
+  languageGate?: {
+    sampleRegionCount: number;
+    hangulShare: number;
+    mediumMeanConfidence: number;
+    koreanMeanConfidence: number;
+    chosen: 'paddleocr_v6_medium' | 'paddleocr_v5_korean';
+  };
 };
 
 export type OcrPostFilterDebugVariant = {

@@ -12,7 +12,7 @@ import {
   adaptLlmThinkingChatCompletionRequest,
   isLlmThinkingConfigurationRejection,
 } from '../llmThinking';
-import { googleWebTranslate } from './googleWeb';
+import { translatePlainBatch, translatePlainText } from './plainTranslate';
 
 export type {
   ChatCompletionResponse,
@@ -65,8 +65,16 @@ export function createTextTranslationTransport(
   return {
     requestChatCompletion,
     translatePlain(request) {
-      return googleWebTranslate(
+      return translatePlainText(
         request.text,
+        request.from,
+        request.to,
+        request.signal,
+      );
+    },
+    translatePlainBatch(request) {
+      return translatePlainBatch(
+        request.texts,
         request.from,
         request.to,
         request.signal,
@@ -149,8 +157,16 @@ export function createDirectTextTranslationTransport(
     },
 
     translatePlain(request) {
-      return googleWebTranslate(
+      return translatePlainText(
         request.text,
+        request.from,
+        request.to,
+        request.signal,
+      );
+    },
+    translatePlainBatch(request) {
+      return translatePlainBatch(
+        request.texts,
         request.from,
         request.to,
         request.signal,

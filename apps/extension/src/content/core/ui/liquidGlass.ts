@@ -263,7 +263,7 @@ export function createLiquidGlass(button: HTMLElement, onVisibilityChange?: (vis
       in: 'diffuse-rgb', result: 'diffuse-profile', values: '0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 0',
     }));
     transfer('light-direction', 'diffuse-direction', value => directional(2 * value - 1, .702));
-    lightColor = node('feFlood', { class: 'mt-x-glass-light-color', 'flood-color': previousColor || (running ? '#f18dc6' : '#fff'), result: 'key-light' });
+    lightColor = node('feFlood', { class: 'mt-x-glass-light-color', 'flood-color': previousColor || (running ? '#96b5ff' : '#fff'), result: 'key-light' });
     activityFilter.append(
       node('feComposite', { in: 'diffuse-direction', in2: 'diffuse-profile', operator: 'in', result: 'diffuse' }),
       node('feComposite', { in: 'specular', in2: 'diffuse', operator: 'arithmetic', k1: 0, k2: 1, k3: 1, k4: 0, result: 'highlight' }),
@@ -351,7 +351,7 @@ export function createLiquidGlass(button: HTMLElement, onVisibilityChange?: (vis
   function syncLight() {
     const active = shouldIlluminate() && typeof view.requestAnimationFrame === 'function';
     lightColor?.style.setProperty('transition-duration', settling ? `${Math.max(1, settling.duration - settling.elapsed)}ms` : '240ms');
-    lightColor?.style.setProperty('flood-color', running && !destroyed ? '#f18dc6' : '#fff');
+    lightColor?.style.setProperty('flood-color', running && !destroyed ? '#96b5ff' : '#fff');
     maskBase?.style.setProperty('opacity', (running || settling) && !destroyed ? '0' : '1');
     if (!active) {
       if (frame) view.cancelAnimationFrame(frame);
