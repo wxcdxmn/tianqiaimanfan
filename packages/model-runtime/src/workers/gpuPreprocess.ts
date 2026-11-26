@@ -14,6 +14,7 @@
  */
 
 import * as ortAll from "onnxruntime-web/all";
+import { planTextureUpload } from "./textureUploadPlan";
 
 // ---------------------------------------------------------------------------
 // WGSL shader: letterbox preprocessing
@@ -157,6 +158,28 @@ function getOrtDevice(): GPUDevice {
   return device;
 }
 
+/**
+ * Bilinear downscale used only when the page is larger than the adapter's
+ * texture limit. `createImageBitmap` keeps this inside the worker (no canvas
+ * transfer) and returns null when the environment cannot resize, so the caller
+ * can fall back to the CPU path instead of losing the GPU device.
+ */
+async function resizeForUpload(
+  source: ImageBitmap | OffscreenCanvas,
+  width: number,
+  height: number,
+): Promise<ImageBitmap | null> {
+  try {
+    return await createImageBitmap(source as ImageBitmap, {
+      resizeWidth: width,
+      resizeHeight: height,
+      resizeQuality: "high",
+    });
+  } catch {
+    return null;
+  }
+}
+
 function ensurePipeline(device: GPUDevice, direct: boolean, autoLayout: boolean, observer?: PreprocessObserver): {
   pipeline: GPUComputePipeline;
   bindGroupLayout: GPUBindGroupLayout;
@@ -255,21 +278,50 @@ export async function preprocessLetterboxGpu(
 
   const srcWidth = imageSource.width;
   const srcHeight = imageSource.height;
+  // Box mapping always uses the original dimensions.
   const lbParams = computeLetterboxParams(srcWidth, srcHeight, dstSize);
+
+  // A manga page is often taller than the adapter's maxTextureDimension2D
+  // (8192 on most desktop GPUs, 16384 on the rest). Creating a texture that big
+  // fails, which loses the device and silently drops the whole page onto the
+  // CPU path — the slow path users notice. Shrink only the upload side.
+  const maxTextureSize = Number(device.limits?.maxTextureDimension2D ?? 8192) || 8192;
+  const upload = planTextureUpload(srcWidth, srcHeight, maxTextureSize);
+  let uploadSource: ImageBitmap | OffscreenCanvas = imageSource;
+  let resizedUpload: ImageBitmap | null = null;
+  if (upload.scaled) {
+    resizedUpload = await resizeForUpload(imageSource, upload.width, upload.height);
+    if (!resizedUpload) {
+      throw new Error(
+        `图片尺寸 ${srcWidth}x${srcHeight} 超过 WebGPU 纹理上限 ${maxTextureSize}，缩放失败`,
+      );
+    }
+    uploadSource = resizedUpload;
+    console.info(
+      `[gpuPreprocess] 图片 ${srcWidth}x${srcHeight} 超过纹理上限 ${maxTextureSize}，`
+      + `上传前已等比缩放到 ${upload.width}x${upload.height}`,
+    );
+  }
+  // The shader only needs the upload size to sample the texture; `unpadded*`
+  // ends up within a pixel of the original values, so the padding stays exact.
+  const renderParams = upload.scaled
+    ? computeLetterboxParams(upload.width, upload.height, dstSize)
+    : lbParams;
 
   // Step 1: Copy image to GPUTexture via copyExternalImageToTexture
   const textureStart = markStart(observer);
   const srcTexture = device.createTexture({
-    size: [srcWidth, srcHeight],
+    size: [upload.width, upload.height],
     format: "rgba8unorm",
     usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
   });
 
   device.queue.copyExternalImageToTexture(
-    { source: imageSource as ImageBitmap | OffscreenCanvas },
+    { source: uploadSource },
     { texture: srcTexture },
-    [srcWidth, srcHeight]
+    [upload.width, upload.height]
   );
+  resizedUpload?.close();
   markEnd(observer, "detector-preprocess-texturecopy", textureStart);
 
   // Step 2: Create output buffers for 3 channels
@@ -301,11 +353,11 @@ export async function preprocessLetterboxGpu(
   const uniformData = new ArrayBuffer(32);
   const uniformView = new DataView(uniformData);
   uniformView.setUint32(0, dstSize, true);
-  uniformView.setUint32(4, lbParams.unpaddedWidth, true);
-  uniformView.setUint32(8, lbParams.unpaddedHeight, true);
-  uniformView.setUint32(12, srcWidth, true);
-  uniformView.setUint32(16, srcHeight, true);
-  uniformView.setFloat32(20, lbParams.ratio, true);
+  uniformView.setUint32(4, renderParams.unpaddedWidth, true);
+  uniformView.setUint32(8, renderParams.unpaddedHeight, true);
+  uniformView.setUint32(12, upload.width, true);
+  uniformView.setUint32(16, upload.height, true);
+  uniformView.setFloat32(20, renderParams.ratio, true);
 
   const uniformBuffer = device.createBuffer({
     size: uniformData.byteLength,
