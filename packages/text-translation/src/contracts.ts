@@ -65,9 +65,21 @@ export type PlainTranslationTransportRequest = {
   signal?: AbortSignal;
 };
 
+export type PlainTranslationBatchRequest = {
+  texts: readonly string[];
+  from: string;
+  to: string;
+  signal?: AbortSignal;
+};
+
 export interface TextTranslationTransport {
   requestChatCompletion(request: ChatCompletionTransportRequest): Promise<ChatCompletionResponse>;
   translatePlain(request: PlainTranslationTransportRequest): Promise<string>;
+  /**
+   * 合并翻译：一次请求翻多条，显著降低免费接口的 429 概率。
+   * 返回顺序必须与入参一致，长度必须相同。
+   */
+  translatePlainBatch?(request: PlainTranslationBatchRequest): Promise<string[]>;
 }
 
 export type TextTranslationConfig = {
@@ -91,6 +103,8 @@ export type TextTranslationRegion = {
   originalLineCount?: number;
   translatedText: string;
   translatedColumns?: string[];
+  /** 该区域翻译失败时置位：下游据此保留原文，不再擦除该处文字。 */
+  translationFailed?: boolean;
 };
 
 export type TranslationDebugInfo = {

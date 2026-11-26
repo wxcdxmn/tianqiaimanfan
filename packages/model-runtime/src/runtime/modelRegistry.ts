@@ -31,6 +31,7 @@ export type ModelName =
   | 'detector'
   | 'inpaint'
   | 'bubble'
+  | 'paddleocr_v5_korean_rec'
   | 'paddleocr_v6_medium_rec';
 
 export type ModelRegistryBackend = {

@@ -21,7 +21,19 @@
 - 发布状态：**有条件放行，当前尚未批准上传**。公开分发前必须归档 GPL-3.0 许可证文本、
   对应源码/获取路径、版权归属和修改记录；上游关于训练数据与字体权利的提示仍需保留。
 
-## 2) `PP-OCRv6_medium_rec.onnx` 与 `paddleocr_v6_dict.txt`
+## 2) `korean_PP-OCRv5_mobile_rec.onnx` 与 `korean_ppocr_v5_dict.txt`
+
+- 固定来源：`PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx`
+  （HF commit `5c6f574`，`inference.onnx`）
+- ONNX SHA-256：`92f0b7785e64fc9090106a241cf4c1eb97472824558272751b88a2a4476d3a08`
+- 字典 SHA-256：`a88071c68c01707489baa79ebe0405b7beb5cca229f4fc94cc3ef992328802d7`
+- 许可证：`Apache-2.0`，与 PaddleOCR 官方仓库一致。
+- 处理记录：ONNX 与固定 revision 的 `inference.onnx` 逐字节相同；字典由同一包
+  `inference.yml` 的 `PostProcess.character_dict` 11,945 个条目按原顺序提取。
+- 发布状态：**允许进入发布清单**，条件是随发布物保留完整 Apache-2.0 文本、上游版权
+  归属和适用的 NOTICE。
+
+## 3) `PP-OCRv6_medium_rec.onnx` 与 `paddleocr_v6_dict.txt`
 
 - 固定来源：`PaddlePaddle/PP-OCRv6_medium_rec_onnx` revision
   `50c7eacafc52fa7bcf4194e8cd08e46f8558504b`
@@ -33,7 +45,7 @@
 - 发布状态：**允许进入发布清单**，条件是随发布物保留完整 Apache-2.0 文本、上游版权
   归属和适用的 NOTICE。
 
-## 3) `aot_inpaint_512.onnx`（去字修复）
+## 4) `aot_inpaint_512.onnx`（去字修复）
 
 - 已确认 checkpoint：`manga-image-translator` `beta-0.3` Release 的
   `inpainting.ckpt`
@@ -44,7 +56,7 @@
 - 发布状态：**阻断**。仓库尚缺生成这一精确 ONNX 的导出器源码、命令、依赖版本、opset、
   导出者/日期与可复现输出记录；在补齐 GPL-3.0 适用材料和完整导出链或替换模型前不得上传。
 
-## 4) `bubble.onnx`（气泡分割）
+## 5) `bubble.onnx`（气泡分割）
 
 - 固定 checkpoint：`huyvux3005/manga109-segmentation-bubble` revision
   `f9a4108c4955136a810e5e92207972f3fb3a65fd` 的 `best.pt`
@@ -55,7 +67,7 @@
 - 发布状态：**阻断**。在完成 AGPL-3.0 适用义务评估并补齐材料、取得覆盖该精确模型的其他
   授权，或替换模型前不得上传。还需核对模型页列出的训练数据集及其引用要求。
 
-## 5) 主要浏览器运行时
+## 6) 主要浏览器运行时
 
 - ONNX Runtime Web `1.24.1`：MIT，
   `https://github.com/microsoft/onnxruntime/blob/v1.24.1/LICENSE`
@@ -72,7 +84,7 @@
 比对，并拒绝未复核的许可证表达式或静默漂移；这份清单不替代各包自身应随分发物保留的
 LICENSE/NOTICE。
 
-## 6) 分发与来源提示
+## 7) 分发与来源提示
 
 - 本仓库根目录 `LICENSE` 为 `GPL-3.0`。
 - `scripts/upload-r2-models.mjs` 会在任何 R2 写入前校验
@@ -80,7 +92,7 @@ LICENSE/NOTICE。
   资产时会阻止上传。
 - 发布源码或构建产物时须保留本文件、适用的完整许可证文本、上游版权/NOTICE 和修改记录。
 
-## 7) 应用图标（Donut icon）
+## 8) 应用图标（Donut icon）
 
 - 来源：`https://www.flaticon.com/free-icon/donut_6402298`
 - 作者：smashingstocks
@@ -88,7 +100,7 @@ LICENSE/NOTICE。
 - 本项目用途：浏览器扩展应用图标
 - 署名要求：须注明 "Designed by smashingstocks from Flaticon"
 
-## 8) 应用字标（Sour Gummy outline）
+## 9) 应用字标（Sour Gummy outline）
 
 - 字体来源：`https://github.com/eifetx/Sour-Gummy-Fonts`
 - Google Fonts 分发：`https://github.com/google/fonts/tree/main/ofl/sourgummy`
@@ -97,7 +109,7 @@ LICENSE/NOTICE。
 - 本项目用途：将 `ShinobuTranslator` 文字转换为 SVG outline，用于 README 头图与扩展弹窗标题；不分发完整字体文件。
 - 版权声明：Copyright 2018 The Sour Gummy Project Authors (`https://github.com/eifetx/Sour-Gummy-Fonts`)
 
-## 9) Popup 的 shadcn/ui 控件
+## 10) Popup 的 shadcn/ui 控件
 
 - 来源：`https://ui.shadcn.com/r/styles/new-york-v4/{component}.json`，于 2026-10-04 获取。
 - 上游：`https://github.com/shadcn-ui/ui`，MIT，Copyright (c) 2023 shadcn。
@@ -106,14 +118,14 @@ LICENSE/NOTICE。
 - 完整许可证：`public/licenses/shadcn-ui.txt`，随 Chromium 和 Firefox 扩展构建复制。
 - Radix、Lucide、Tailwind 相关 npm 依赖的精确版本和许可证包含在 `THIRD_PARTY_DEPENDENCIES.json`。
 
-## 10) 连续曲率与同心圆角
+## 11) 连续曲率与同心圆角
 
 - 来源：`https://github.com/diip3sh/tailwindcss-concentric`，版本 `0.1.0`。
 - 许可证：MIT，Copyright (c) 2026 diip3sh。
 - 用途：通过 `rounded-concentric` 和 `concentric-squircle` 生成网页、弹窗与页面浮层的圆角样式。
 - 完整许可证：`public/licenses/tailwindcss-concentric.txt`，随网页及扩展构建复制。
 
-## 11) 翻译按钮的文字、图标动效与玻璃光学
+## 12) 翻译按钮的文字、图标动效与玻璃光学
 
 - Morphicons `1.7.1`：官方 npm 分发 `https://registry.npmjs.org/morphicons/-/morphicons-1.7.1.tgz`，上游 `https://github.com/guillermolg00/morphicons`，MIT，Copyright (c) 2026 Guillermo。用于 SVG 描边几何连续变形。
 - Torph `0.1.3`：官方 npm 分发 `https://registry.npmjs.org/torph/-/torph-0.1.3.tgz`，上游 `https://github.com/lochie/torph`，MIT，Copyright (c) 2025 Lochie Axon。用于文字字素匹配、位置与透明度过渡。
@@ -126,7 +138,7 @@ LICENSE/NOTICE。
 - 按压反馈另移植同版本 `src/dom/interaction.ts`、`src/core/spring.ts` 与 `src/styles.css`：保留按下膨胀、拖动的弹性阻力与拉伸、松开的解析弹簧回弹及触点白色光晕。修改记录：独立于上游场景调度器运行，补充隐藏、失焦、禁用与销毁处理；保留原生按钮点击和键盘语义，按压反馈不改变固定 45° 边缘光照。
 - Liquid DOM 前景颜色参考：`https://github.com/AndrewPrifer/liquid-dom/tree/dd342ab663d718e8b4edf4cd39983b9a873360a7`，MIT，Copyright (c) 2026 Andras Prifer。文字颜色选择使用该库 `ADAPTIVE_TINT.md` 的背景亮度分位值思路，针对通透按钮另行计算统一前景色。完整许可证 `public/licenses/liquid-dom.txt` 随 Chromium 和 Firefox 扩展构建复制。
 
-## 12) 免责声明
+## 13) 免责声明
 
 - 本文件仅用于工程合规记录，不构成法律意见。许可证冲突或权利范围不明确时，不以模型页
   标签代替权利人授权；是否公开分发由维护者结合上游材料自行决定。

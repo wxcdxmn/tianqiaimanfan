@@ -18,7 +18,7 @@ const EXTENSION_ICONS = {
 };
 
 const TOOLBAR_ACTION = {
-  default_title: 'ShinobuTranslator',
+  default_title: '天恰漫翻 Tianqiaimanfan',
   default_popup: 'popup.html',
   default_icon: EXTENSION_ICONS,
 };
@@ -27,7 +27,8 @@ const EXTENSION_PAGE_CSP = "script-src 'self' 'wasm-unsafe-eval'; worker-src 'se
 
 export function createExtensionManifest(target: ExtensionTarget, version: string): Manifest {
   const common: Manifest = {
-    name: 'ShinobuTranslator',
+    name: '天恰漫翻 Tianqiaimanfan',
+  author: 'tianqiaimanfan',
     version,
     description: '翻译网页漫画和图片中的文字，支持截图翻译、本地 OCR、去字排版，以及谷歌翻译和大模型翻译。',
     icons: EXTENSION_ICONS,
@@ -99,7 +100,7 @@ export function createExtensionManifest(target: ExtensionTarget, version: string
     content_security_policy: EXTENSION_PAGE_CSP,
     browser_specific_settings: {
       gecko: {
-        id: 'shinobu-translator@donutshinobu',
+        id: 'tianqiaimanfan@tianqiaimanfan',
         strict_min_version: '140.0',
         data_collection_permissions: {
           required: ['websiteContent', 'authenticationInfo'],

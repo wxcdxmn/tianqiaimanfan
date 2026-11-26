@@ -6,6 +6,7 @@ import { serializeOnnxSessionOptions } from "../runtime/onnxSessionOptions";
 import { toErrorMessage } from '../runtime/errorMessage';
 import { isContextLostRuntimeError, isCreateTimeoutError } from "../runtime/onnxTypes";
 import type { RuntimeProvider, WebNnDeviceType } from "../runtime/onnxTypes";
+import { shouldHintHighPerformanceGpu } from "../runtime/gpuPreference";
 import type {
   TensorTransport,
   WorkerSessionHandle,
@@ -66,10 +67,14 @@ function ensureOrtEnv(): void {
   };
   ortAll.env.wasm.numThreads = wasmThreads;
   ortAll.env.wasm.proxy = false;
+  // Expected shape-op CPU fallbacks warn once per session; keep the console quiet.
+  ortAll.env.logLevel = "error";
 
   if (ortAll.env.webgpu) {
     installShaderWarmup(ortAll.env.versions.web ?? 'unknown');
-    ortAll.env.webgpu.powerPreference = "high-performance";
+    if (shouldHintHighPerformanceGpu()) {
+      ortAll.env.webgpu.powerPreference = "high-performance";
+    }
   }
 
   if (!canUseWasmThreads && hwThreads > 1) {

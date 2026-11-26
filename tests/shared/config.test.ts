@@ -19,13 +19,24 @@ import {
 } from "../../apps/extension/src/shared/config";
 
 describe("built-in LLM catalog", () => {
-  it.each(['autoTranslate', 'simpleButtons'] as const)('defaults %s off and accepts only a boolean preference', (preference) => {
+  it.each(['simpleButtons'] as const)('defaults %s off and accepts only a boolean preference', (preference) => {
     expect(normalizeSettings({})[preference]).toBe(false);
     expect(normalizeSettings({ [preference]: 'true' })[preference]).toBe(false);
     const settings = normalizeSettings({ [preference]: true });
     expect(settings[preference]).toBe(true);
     expect(normalizeSettings(settings)).toEqual(settings);
     expect(toPipelineConfig(settings)).not.toHaveProperty(preference);
+  });
+
+  it('defaults autoTranslate on and accepts only a boolean preference', () => {
+    expect(normalizeSettings({}).autoTranslate).toBe(true);
+    // 非布尔值按「回退到默认值」处理，默认已开启，所以字符串输入也是 true。
+    expect(normalizeSettings({ autoTranslate: 'true' }).autoTranslate).toBe(true);
+    const settings = normalizeSettings({ autoTranslate: true });
+    expect(settings.autoTranslate).toBe(true);
+    expect(normalizeSettings(settings)).toEqual(settings);
+    expect(normalizeSettings({ autoTranslate: false }).autoTranslate).toBe(false);
+    expect(toPipelineConfig(settings)).not.toHaveProperty('autoTranslate');
   });
 
   it('defaults LLM OCR filtering off and only runs it with the local LLM pipeline', () => {

@@ -201,8 +201,8 @@ describe('llmTranslate', () => {
       authMode: 'api_key',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-5.4-mini',
-      from: 'ko',
-      to: 'en',
+      from: 'xx',
+      to: 'yy',
       text: '안녕하세요',
     });
 
@@ -230,7 +230,7 @@ describe('llmTranslate', () => {
     ].join('\n'));
 
     const unknownLanguageBody = chatMessages[2].body;
-    expect(unknownLanguageBody.messages[1].content).toContain('请把以下文本从 ko 翻译成 en。');
+    expect(unknownLanguageBody.messages[1].content).toContain('请把以下文本从 xx 翻译成 yy。');
   });
 
   it('keeps tweet context separate from OCR text and describes its reference uses', async () => {

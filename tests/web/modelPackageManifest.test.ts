@@ -36,6 +36,8 @@ describe('Web model package manifest', () => {
         },
         { id: 'inpaint', path: 'aot_inpaint_512.onnx' },
         { id: 'bubble', path: 'bubble.onnx' },
+        { id: 'paddleocr-v5-korean', path: 'korean_PP-OCRv5_mobile_rec.onnx' },
+        { id: 'paddleocr-v5-korean-dictionary', path: 'korean_ppocr_v5_dict.txt' },
         { id: 'paddleocr-v6-medium', path: 'PP-OCRv6_medium_rec.onnx' },
         { id: 'paddleocr-v6-dictionary', path: 'paddleocr_v6_dict.txt' },
       ],

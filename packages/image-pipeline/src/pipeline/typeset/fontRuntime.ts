@@ -22,7 +22,11 @@ const typesetFontAssets = [
 ] as const;
 
 export function resolveTypesetFontFamily(targetLang?: string): string {
-  return targetLang === 'zh-CHT'
+  // 繁体中文用 TW 字形，其余（简中/日/韩/拉丁/泰/阿）走 CN 字形，
+  // Source Han Sans 本身含假名与谚文字形，缺字时浏览器会回落到系统字体。
+  const normalized = (targetLang ?? '').trim().toLowerCase().replace(/_/g, '-');
+  const traditional = normalized === 'zh-cht' || normalized === 'zh-tw' || normalized === 'zh-hant' || normalized === 'zh-hk';
+  return traditional
     ? '"MTX-SourceHanSans-TW", "Noto Sans CJK TC", "PingFang TC", sans-serif'
     : '"MTX-SourceHanSans-CN", "Noto Sans CJK SC", "PingFang SC", sans-serif';
 }

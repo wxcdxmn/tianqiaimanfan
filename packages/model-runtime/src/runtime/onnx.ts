@@ -3,6 +3,7 @@ import type { InferenceSession } from "onnxruntime-common";
 import { toErrorMessage } from './errorMessage';
 import { isContextLostError, isCreateTimeoutError } from "./onnxTypes";
 import type { RuntimeProvider, WebNnDeviceType } from "./onnxTypes";
+import { shouldHintHighPerformanceGpu } from "./gpuPreference";
 export type OrtxSession = InferenceSession;
 export type { RuntimeProvider, WebNnDeviceType } from "./onnxTypes";
 export { isContextLostRuntimeError } from "./onnxTypes";
@@ -138,8 +139,11 @@ export function ensureOrtEnv(): void {
   ortAll.env.wasm.wasmPaths = configuredOrtPath;
   ortAll.env.wasm.numThreads = wasmThreads;
   ortAll.env.wasm.proxy = false;
+  // ORT warns per session that a few shape ops fall back to CPU; that is
+  // expected for these models and only floods the extension console.
+  ortAll.env.logLevel = "error";
 
-  if (ortAll.env.webgpu) {
+  if (ortAll.env.webgpu && shouldHintHighPerformanceGpu()) {
     ortAll.env.webgpu.powerPreference = "high-performance";
   }
 

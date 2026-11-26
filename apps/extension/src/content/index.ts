@@ -303,9 +303,16 @@ document.addEventListener('mouseleave', () => {
 }, true);
 
 // Listen for context-menu translate requests from background
+import { isExtensionContextAlive } from '../shared/contextGuard';
 const chromeApi = getExtensionApi();
 if (chromeApi?.runtime?.onMessage?.addListener) {
   chromeApi.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+    // 扩展重载后旧脚本还在页面上：chrome API 已失效，安静退出并提示刷新，
+    // 不再向浏览器抛 "Extension context invalidated"。
+    if (!isExtensionContextAlive()) {
+      console.info('[tianqiaimanfan] 扩展已重新加载，请刷新页面');
+      return false;
+    }
     if (!isRecord(message) || typeof message.type !== 'string') {
       return false;
     }

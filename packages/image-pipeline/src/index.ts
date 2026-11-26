@@ -54,6 +54,7 @@ export type PipelinePlatform = PlatformProvider & {
 };
 
 export type {
+  ImageCrop,
   PipelineCanvas,
   PipelineFontDescriptors,
   PipelineImage,

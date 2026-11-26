@@ -116,6 +116,7 @@ describe('ONNX Worker production contract', () => {
       'bubble',
       'detector',
       'inpaint',
+      'paddleocr_v5_korean_rec',
       'paddleocr_v6_medium_rec',
     ]);
     expect(manifest.models.detector).toEqual(expect.objectContaining({

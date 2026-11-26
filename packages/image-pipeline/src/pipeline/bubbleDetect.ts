@@ -1,7 +1,8 @@
 import type { BubbleMask, Rect, TextRegion } from "../types";
-import type { PlatformProvider, PipelineImage } from "../runtime/platform";
+import type { ImageCrop, PlatformProvider, PipelineImage } from "../runtime/platform";
 import { hasBubbleMaskPixel } from "./bubbleMask";
 import { nmsBoxes, type ScoredBox } from "./utils";
+import { planImageTiles, dedupeTiledBoxes } from "./detect/tiling";
 import {
   type ModelRuntime,
   type RuntimeProvider,
@@ -37,9 +38,14 @@ type LetterboxResult = {
   padY: number;
 };
 
-function preprocessLetterbox(image: PipelineImage, size: number, platform: PlatformProvider): LetterboxResult {
-  const w = image.naturalWidth;
-  const h = image.naturalHeight;
+function preprocessLetterbox(
+  image: PipelineImage,
+  size: number,
+  platform: PlatformProvider,
+  crop?: ImageCrop
+): LetterboxResult {
+  const w = crop ? crop.width : image.naturalWidth;
+  const h = crop ? crop.height : image.naturalHeight;
   const ratio = Math.min(size / w, size / h);
   const newW = Math.round(w * ratio);
   const newH = Math.round(h * ratio);
@@ -52,7 +58,15 @@ function preprocessLetterbox(image: PipelineImage, size: number, platform: Platf
 
   ctx.fillStyle = "#7f7f7f";
   ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(image, padX, padY, newW, newH);
+  if (crop) {
+    ctx.drawImage(
+      image,
+      crop.x, crop.y, crop.width, crop.height,
+      padX, padY, newW, newH
+    );
+  } else {
+    ctx.drawImage(image, padX, padY, newW, newH);
+  }
 
   const data = ctx.getImageData(0, 0, size, size).data;
   const input = new Float32Array(3 * size * size);
@@ -73,6 +87,7 @@ async function runBubbleInference(
   image: PipelineImage,
   platform: PlatformProvider,
   modelRuntime: ModelRuntime,
+  crop?: ImageCrop,
 ): Promise<{
   output0: Float32Array;
   output0Shape: readonly number[];
@@ -84,7 +99,7 @@ async function runBubbleInference(
 }> {
   const handle = await modelRuntime.getSession("bubble");
   const size = 640;
-  const prep = preprocessLetterbox(image, size, platform);
+  const prep = preprocessLetterbox(image, size, platform, crop);
 
   const inputName = handle.inputNames[0] ?? "images";
   const feeds: Record<string, TensorTransport> = {
@@ -301,14 +316,18 @@ export function decodeBubbleMasks(
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function detectBubbles(
+/** Bubbles are large targets; coarser bands than the text detector keep this cheap. */
+const BUBBLE_TILE_ASPECT = 2.4;
+
+async function detectBubblesSingle(
   image: PipelineImage,
   platform: PlatformProvider,
   modelRuntime: ModelRuntime,
+  crop?: ImageCrop,
 ): Promise<BubbleDetectResult> {
-  const { output0, output0Shape, output1, output1Shape, prep, actualProvider, actualWebnnDeviceType } = await runBubbleInference(image, platform, modelRuntime);
-  const imgW = image.naturalWidth;
-  const imgH = image.naturalHeight;
+  const { output0, output0Shape, output1, output1Shape, prep, actualProvider, actualWebnnDeviceType } = await runBubbleInference(image, platform, modelRuntime, crop);
+  const imgW = crop ? crop.width : image.naturalWidth;
+  const imgH = crop ? crop.height : image.naturalHeight;
 
   const detections = decodeDetections(output0, output0Shape, prep, imgW, imgH);
   const masks = decodeBubbleMasks(detections, output1, output1Shape, prep, imgW, imgH);
@@ -320,6 +339,62 @@ export async function detectBubbles(
   }));
 
   return { bubbles, actualProvider, actualWebnnDeviceType };
+}
+
+/**
+ * Detect speech bubbles across a page.
+ *
+ * A webtoon strip fed whole into the 640² input keeps only ~8% of its width,
+ * so the bubble stage — not the text detector — was the reason regions came
+ * back "unmatched". Long strips are banded the same way as text detection and
+ * stitched back into whole-image coordinates.
+ */
+export async function detectBubbles(
+  image: PipelineImage,
+  platform: PlatformProvider,
+  modelRuntime: ModelRuntime,
+): Promise<BubbleDetectResult> {
+  const plan = planImageTiles(image.naturalWidth, image.naturalHeight, {
+    maxTileAspect: BUBBLE_TILE_ASPECT,
+  });
+  if (!plan.tiled) {
+    return detectBubblesSingle(image, platform, modelRuntime);
+  }
+
+  const tiles = plan.tiles;
+  console.log(
+    `[bubble] 长条图切片检测: ${image.naturalWidth}x${image.naturalHeight} → ${tiles.length} 片 `
+    + `(片高 ${tiles[0].height})`
+  );
+
+  const collected: BubbleDetection[] = [];
+  let lastProvider: RuntimeProvider = "wasm";
+  let lastWebnnDeviceType: WebNnDeviceType | undefined;
+
+  for (const tile of tiles) {
+    try {
+      const frame = await detectBubblesSingle(image, platform, modelRuntime, tile);
+      lastProvider = frame.actualProvider ?? lastProvider;
+      lastWebnnDeviceType = frame.actualWebnnDeviceType ?? lastWebnnDeviceType;
+      for (const bubble of frame.bubbles) {
+        collected.push({
+          box: { ...bubble.box, y: bubble.box.y + tile.y },
+          score: bubble.score,
+          mask: { ...bubble.mask, y: bubble.mask.y + tile.y },
+        });
+      }
+    } catch (error) {
+      // One bad band must not lose the rest of the chapter.
+      console.warn(
+        `[bubble] 切片检测失败 (y=${tile.y} h=${tile.height}): `
+        + `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  const bubbles = dedupeTiledBoxes(collected, 0.5);
+  console.log(`[bubble] 切片检测完成: ${tiles.length} 片 → ${collected.length} 个原始气泡, 去重后 ${bubbles.length} 个`);
+  return { bubbles, actualProvider: lastProvider, actualWebnnDeviceType: lastWebnnDeviceType };
 }
 
 // ---------------------------------------------------------------------------

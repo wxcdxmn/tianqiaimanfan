@@ -40,13 +40,13 @@ export function injectStyles(): void {
 
     /* Dark theme (Twitter) — default fallback */
     [data-theme='dark'] {
-      --mt-glass-text: #fff5fb;
+      --mt-glass-text: #f4f7ff;
       --mt-bg: oklch(0.14 0.01 250 / 0.72);
       --mt-bg-hover: oklch(0.14 0.01 250 / 0.85);
       --mt-bg-active: oklch(0.14 0.01 250 / 0.92);
-      --mt-bg-secondary: oklch(0.16 0.03 175 / 0.72);
+      --mt-bg-secondary: oklch(0.16 0.03 205 / 0.72);
       --mt-border: oklch(0.92 0.01 250 / 0.85);
-      --mt-border-secondary: oklch(0.85 0.05 175 / 0.7);
+      --mt-border-secondary: oklch(0.85 0.05 205 / 0.7);
       --mt-text: oklch(0.94 0.01 250);
       --mt-text-detail: oklch(0.94 0.01 250 / 0.7);
       --mt-text-shadow: 0 1px 3px oklch(0.1 0 0 / 0.6);
@@ -58,24 +58,24 @@ export function injectStyles(): void {
       --mt-stage-bg-hover: var(--mt-bg-hover, oklch(0.14 0.01 250 / 0.85));
       --mt-stage-bg-active: var(--mt-bg-active, oklch(0.14 0.01 250 / 0.92));
       --mt-stage-border: var(--mt-border, oklch(0.92 0.01 250 / 0.85));
-      --mt-stage-border-soft: oklch(0.92 0.02 350 / 0.2);
+      --mt-stage-border-soft: oklch(0.92 0.02 262 / 0.2);
       --mt-stage-muted: var(--mt-text-detail, oklch(0.94 0.01 250 / 0.7));
-      --mt-stage-track: oklch(0.94 0.02 350 / 0.18);
-      --mt-stage-fill: oklch(0.77 0.1 350 / 0.94);
-      --mt-stage-fill-soft: oklch(0.83 0.07 350 / 0.5);
-      --mt-stage-node-bg: oklch(0.22 0.022 350 / 0.44);
-      --mt-stage-node-border: oklch(0.86 0.04 350 / 0.22);
+      --mt-stage-track: oklch(0.94 0.02 262 / 0.18);
+      --mt-stage-fill: oklch(0.77 0.1 262 / 0.94);
+      --mt-stage-fill-soft: oklch(0.83 0.07 262 / 0.5);
+      --mt-stage-node-bg: oklch(0.22 0.022 262 / 0.44);
+      --mt-stage-node-border: oklch(0.86 0.04 262 / 0.22);
     }
 
     /* Light theme (Pixiv) */
     [data-theme='light'] {
-      --mt-glass-text: #402c39;
+      --mt-glass-text: #2b3446;
       --mt-bg: oklch(0.97 0.005 250 / 0.82);
       --mt-bg-hover: oklch(0.97 0.005 250 / 0.88);
       --mt-bg-active: oklch(0.97 0.005 250 / 0.92);
-      --mt-bg-secondary: oklch(0.92 0.03 175 / 0.82);
+      --mt-bg-secondary: oklch(0.92 0.03 205 / 0.82);
       --mt-border: oklch(0.55 0.01 250 / 0.7);
-      --mt-border-secondary: oklch(0.4 0.05 175 / 0.7);
+      --mt-border-secondary: oklch(0.4 0.05 205 / 0.7);
       --mt-text: oklch(0.2 0.01 250);
       --mt-text-detail: oklch(0.2 0.01 250 / 0.7);
       --mt-text-shadow: 0 1px 3px oklch(0.97 0.005 250 / 0.5);
@@ -87,13 +87,13 @@ export function injectStyles(): void {
       --mt-stage-bg-hover: var(--mt-bg-hover, oklch(0.97 0.005 250 / 0.88));
       --mt-stage-bg-active: var(--mt-bg-active, oklch(0.97 0.005 250 / 0.92));
       --mt-stage-border: var(--mt-border, oklch(0.55 0.01 250 / 0.7));
-      --mt-stage-border-soft: oklch(0.76 0.035 350 / 0.24);
+      --mt-stage-border-soft: oklch(0.76 0.035 262 / 0.24);
       --mt-stage-muted: var(--mt-text-detail, oklch(0.2 0.01 250 / 0.7));
-      --mt-stage-track: oklch(0.86 0.03 350 / 0.64);
-      --mt-stage-fill: oklch(0.7 0.105 350 / 0.9);
-      --mt-stage-fill-soft: oklch(0.82 0.055 350 / 0.62);
-      --mt-stage-node-bg: oklch(0.985 0.016 350 / 0.76);
-      --mt-stage-node-border: oklch(0.78 0.04 350 / 0.28);
+      --mt-stage-track: oklch(0.86 0.03 262 / 0.64);
+      --mt-stage-fill: oklch(0.7 0.105 262 / 0.9);
+      --mt-stage-fill-soft: oklch(0.82 0.055 262 / 0.62);
+      --mt-stage-node-bg: oklch(0.985 0.016 262 / 0.76);
+      --mt-stage-node-border: oklch(0.78 0.04 262 / 0.28);
     }
 
     .mt-x-overlay-inline {
@@ -126,7 +126,7 @@ export function injectStyles(): void {
       height: 36px;
       position: relative;
       border: 1px solid var(--mt-border, oklch(0.92 0.01 250 / 0.85));
-      border-radius: 999px;
+      border-radius: 18px;
       padding: 0 10px;
       cursor: pointer;
       background-color: var(--mt-bg, oklch(0.14 0.01 250 / 0.72));
@@ -225,8 +225,8 @@ export function injectStyles(): void {
     }
     .mt-x-control.mt-x-liquid,
     .mt-x-screenshot-select-toolbar.mt-x-liquid {
-      --mt-glass-solid: #f3edf0;
-      --mt-glass-shadow: #3725321f;
+      --mt-glass-solid: #eef1f8;
+      --mt-glass-shadow: #232e421f;
       box-sizing: border-box;
       isolation: isolate;
       min-width: 0;
@@ -237,7 +237,7 @@ export function injectStyles(): void {
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       /* Inherit the nearest theme; page-wide light selectors can cross dark anchors. */
-      color: var(--mt-glass-text, #fff5fb);
+      color: var(--mt-glass-text, #f4f7ff);
       text-shadow: none;
       -webkit-text-fill-color: currentColor;
       letter-spacing: 0;
@@ -255,14 +255,14 @@ export function injectStyles(): void {
       background-color: transparent;
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
-      box-shadow: inset 0 .5px .65px #fff8fc40, inset 0 -.5px .8px #68334924, 0 2px 8px var(--mt-glass-shadow, #37253233);
+      box-shadow: inset 0 .5px .65px #f0f5ff40, inset 0 -.5px .8px #2b3c6424, 0 2px 8px var(--mt-glass-shadow, #232e4233);
       transition: background-color 180ms cubic-bezier(.25,1,.5,1), box-shadow 180ms cubic-bezier(.25,1,.5,1);
       pointer-events: none;
     }
     .mt-x-liquid .mt-x-glass-optical {
       /* Clear tone and the padded optical overlay replace the fallback's inset highlights. */
       background-color: transparent;
-      box-shadow: 0 2px 8px var(--mt-glass-shadow, #37253233);
+      box-shadow: 0 2px 8px var(--mt-glass-shadow, #232e4233);
     }
     .mt-x-glass-overlay {
       position: absolute;
@@ -294,12 +294,12 @@ export function injectStyles(): void {
     .mt-x-liquid .mt-x-label { display: block; line-height: 20px; font-weight: 550; overflow: visible; white-space: pre; transition: none; }
     .mt-x-control.mt-x-liquid:hover:not(:disabled), .mt-x-control.mt-x-liquid:active:not(:disabled) { background: transparent; }
     @media (prefers-reduced-transparency: reduce) {
-      .mt-x-control.mt-x-liquid, .mt-x-screenshot-select-toolbar.mt-x-liquid { color: #17131a !important; }
+      .mt-x-control.mt-x-liquid, .mt-x-screenshot-select-toolbar.mt-x-liquid { color: #141922 !important; }
       .mt-x-liquid .mt-x-glass-material { background: var(--mt-glass-solid); backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
       .mt-x-liquid .mt-x-icon, .mt-x-liquid .mt-x-label, .mt-x-liquid [torph-item] { color: inherit !important; }
     }
     @supports not (backdrop-filter: blur(1px)) {
-      .mt-x-control.mt-x-liquid, .mt-x-screenshot-select-toolbar.mt-x-liquid { color: #17131a !important; }
+      .mt-x-control.mt-x-liquid, .mt-x-screenshot-select-toolbar.mt-x-liquid { color: #141922 !important; }
       .mt-x-liquid .mt-x-glass-material { background: var(--mt-glass-solid); }
       .mt-x-liquid .mt-x-icon, .mt-x-liquid .mt-x-label, .mt-x-liquid [torph-item] { color: inherit !important; }
     }
@@ -307,8 +307,8 @@ export function injectStyles(): void {
       min-width: 92px;
       justify-content: center;
       padding: 0 14px;
-      background-color: var(--mt-bg-secondary, oklch(0.16 0.03 175 / 0.72));
-      border-color: var(--mt-border-secondary, oklch(0.85 0.05 175 / 0.7));
+      background-color: var(--mt-bg-secondary, oklch(0.16 0.03 205 / 0.72));
+      border-color: var(--mt-border-secondary, oklch(0.85 0.05 205 / 0.7));
     }
     .mt-x-detail {
       max-width: 260px;
@@ -396,8 +396,8 @@ export function injectStyles(): void {
       height: 5px;
       flex: 0 0 auto;
       border-radius: 50%;
-      background: var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96));
-      box-shadow: 0 0 0 3px oklch(0.78 0.08 350 / 0.12);
+      background: var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96));
+      box-shadow: 0 0 0 3px oklch(0.78 0.08 262 / 0.12);
       content: "";
     }
     .mt-x-stage-card-meta {
@@ -413,7 +413,7 @@ export function injectStyles(): void {
       font-weight: 660;
       line-height: 1;
       white-space: nowrap;
-      color: var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96));
+      color: var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96));
     }
     .mt-x-stage-card-chevron {
       width: 7px;
@@ -496,7 +496,7 @@ export function injectStyles(): void {
       height: 100%;
       min-width: 3px;
       border-radius: 999px;
-      background: color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96)) var(--mt-stage-alpha, 76%), var(--mt-stage-fill-soft, oklch(0.83 0.07 350 / 0.5)));
+      background: color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96)) var(--mt-stage-alpha, 76%), var(--mt-stage-fill-soft, oklch(0.83 0.07 262 / 0.5)));
       cursor: help;
       opacity: 0.9;
       transition: opacity 0.15s ease-out, filter 0.15s ease-out, box-shadow 0.15s ease-out;
@@ -507,7 +507,7 @@ export function injectStyles(): void {
       filter: saturate(1.15);
       box-shadow:
         0 0 0 1px oklch(1 0 0 / 0.2),
-        0 0 10px color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96)) 38%, transparent);
+        0 0 10px color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96)) 38%, transparent);
     }
     .mt-x-stage-segment:focus-visible {
       z-index: 5;
@@ -649,7 +649,7 @@ export function injectStyles(): void {
       height: 100%;
       min-width: 3px;
       border-radius: 999px;
-      background: color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96)) 82%, var(--mt-stage-fill-soft, oklch(0.83 0.07 350 / 0.5)));
+      background: color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96)) 82%, var(--mt-stage-fill-soft, oklch(0.83 0.07 262 / 0.5)));
       box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.18);
       cursor: help;
       pointer-events: auto;
@@ -658,7 +658,7 @@ export function injectStyles(): void {
       opacity: 0.68;
     }
     .mt-x-stage-parallel-bar[data-stage='inpaint'] {
-      background: color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96)) 94%, var(--mt-stage-fill-soft, oklch(0.83 0.07 350 / 0.5)));
+      background: color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96)) 94%, var(--mt-stage-fill-soft, oklch(0.83 0.07 262 / 0.5)));
     }
     .mt-x-stage-parallel-bar:hover,
     .mt-x-stage-parallel-bar:focus-visible {
@@ -666,7 +666,7 @@ export function injectStyles(): void {
       outline: none;
       box-shadow:
         inset 0 1px 0 oklch(1 0 0 / 0.2),
-        0 0 10px color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96)) 36%, transparent);
+        0 0 10px color-mix(in oklab, var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96)) 36%, transparent);
     }
     .mt-x-stage-runtime {
       display: grid;
@@ -687,9 +687,9 @@ export function injectStyles(): void {
       column-gap: 5px;
       min-height: 42px;
       box-sizing: border-box;
-      border: 1px solid var(--mt-stage-node-border, oklch(0.85 0.05 175 / 0.7));
+      border: 1px solid var(--mt-stage-node-border, oklch(0.85 0.05 205 / 0.7));
       padding: 7px 8px 6px;
-      background: var(--mt-stage-node-bg, oklch(0.16 0.03 175 / 0.72));
+      background: var(--mt-stage-node-bg, oklch(0.16 0.03 205 / 0.72));
       color: var(--mt-stage-muted, oklch(0.94 0.01 250 / 0.7));
       box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06);
     }
@@ -698,8 +698,8 @@ export function injectStyles(): void {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: var(--mt-stage-fill, oklch(0.72 0.12 350 / 0.96));
-      box-shadow: 0 0 0 3px oklch(0.72 0.1 350 / 0.1);
+      background: var(--mt-stage-fill, oklch(0.72 0.12 262 / 0.96));
+      box-shadow: 0 0 0 3px oklch(0.72 0.1 262 / 0.1);
     }
     .mt-x-runtime-node[data-status='disabled'] .mt-x-runtime-dot,
     .mt-x-runtime-node[data-status='unknown'] .mt-x-runtime-dot {
@@ -1121,7 +1121,7 @@ export function injectStyles(): void {
       z-index: 0 !important;
     }
     .mt-x-layer-stage > .mt-x-layer-highlight {
-      --mt-layer-highlight: oklch(0.65 0.16 350);
+      --mt-layer-highlight: oklch(0.65 0.16 262);
       z-index: 2 !important;
       opacity: 0.35;
       filter: drop-shadow(0 0 var(--mt-layer-glow, 2px) var(--mt-layer-highlight));
@@ -1139,7 +1139,7 @@ export function injectStyles(): void {
     }
     .mt-x-layer-selection > polygon {
       fill: none;
-      stroke: oklch(0.65 0.16 350);
+      stroke: oklch(0.65 0.16 262);
       stroke-width: 1.5;
       stroke-dasharray: 8 4;
       stroke-linejoin: round;
@@ -1173,7 +1173,7 @@ export function injectStyles(): void {
       user-select: text;
     }
     .mt-x-layer-input .mt-x-layer-glyph { position: relative; display: inline-block; vertical-align: top; white-space: pre; user-select: text; }
-    .mt-x-layer-input::selection, .mt-x-layer-input *::selection { background: oklch(0.65 0.16 350 / 0.3); }
+    .mt-x-layer-input::selection, .mt-x-layer-input *::selection { background: oklch(0.65 0.16 262 / 0.3); }
     .mt-x-layer-error { flex-basis: 100%; color: var(--mt-error-text, oklch(0.5 0.16 25)); }
     .mt-x-layer-error:empty { display: none; }
 

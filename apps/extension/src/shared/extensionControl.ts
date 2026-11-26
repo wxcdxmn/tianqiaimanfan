@@ -102,6 +102,7 @@ export type ExtensionInterfacePreferencesPatch = Partial<Pick<
   | 'stageTimingCardExpanded'
   | 'debugOptionsExpanded'
   | 'enableImageEditing'
+  | 'simpleButtons'
 >>;
 
 export type ExtensionControlCommand =

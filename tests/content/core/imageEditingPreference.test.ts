@@ -23,11 +23,12 @@ describe('live image editing preference', () => {
     const listener = vi.fn();
     const stop = new ContentBooleanPreference(runtime, 'autoTranslate').subscribe(listener);
     await Promise.resolve(); await Promise.resolve();
-    expect(listener.mock.calls).toEqual([[false]]);
+    // 订阅先给出本地缓存值（默认 false），读到投影后应用真实值（自动翻译默认开启）。
+    expect(listener.mock.calls).toEqual([[false], [true]]);
     const next = projection(2, false);
-    next.settings.autoTranslate = true;
+    next.settings.autoTranslate = false;
     push({ type: 'mt:extension-control-changed', projection: next }, port);
-    expect(listener).toHaveBeenLastCalledWith(true);
+    expect(listener).toHaveBeenLastCalledWith(false);
     stop();
     expect(port.disconnect).toHaveBeenCalledOnce();
   });

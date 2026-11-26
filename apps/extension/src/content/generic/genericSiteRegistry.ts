@@ -1,4 +1,5 @@
 import { getExtensionApi } from '../../shared/extensionRuntime';
+import { isExtensionContextAlive } from '../../shared/contextGuard';
 import {
   defaultGenericSiteState,
   genericSiteHostFromKey,
@@ -69,6 +70,11 @@ function observeStorage(host: string): void {
   if (observingStorage || !storage?.onChanged?.addListener) return;
   observingStorage = true;
   storage.onChanged.addListener((changes, areaName) => {
+    if (!isExtensionContextAlive()) {
+      observingStorage = false;
+      console.info('[tianqiaimanfan] 扩展已重新加载，请刷新页面');
+      return;
+    }
     if (areaName && areaName !== 'local') return;
     for (const [key, change] of Object.entries(changes)) {
       if (!isGenericSiteStorageKey(key)) continue;

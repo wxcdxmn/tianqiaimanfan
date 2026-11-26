@@ -23,6 +23,7 @@ import {
   type LlmProvider,
 } from '../shared/config';
 import { getExtensionRuntime } from '../shared/extensionRuntime';
+import { sourceLanguageOptions, targetLanguageOptions } from '../shared/languages';
 import {
   getLlmThinkingControl,
   llmThinkingCapabilityKey,
@@ -335,7 +336,7 @@ function SelectControl<T extends string>({
   disabled,
   ariaLabel,
 }: {
-  options: SelectOption<T>[];
+  options: readonly SelectOption<T>[];
   value: T;
   onChange: (value: T) => void;
   disabled?: boolean;
@@ -972,8 +973,8 @@ export function App() {
               <h1>
                 <img
                   className="popup-header-wordmark"
-                  src="brand/shinobu-wordmark.svg"
-                  alt="ShinobuTranslator"
+                  src="brand/tianqiaimanfan-wordmark.svg"
+                  alt="天恰漫翻 Tianqiaimanfan"
                 />
               </h1>
               <p className="subtitle">漫画图片翻译助手</p>
@@ -982,7 +983,7 @@ export function App() {
           <div className="popup-header-meta">
             <Button asChild variant="ghost" className="popup-header-github">
               <a
-                href="https://github.com/DonutShinobu/ShinobuTranslator"
+                href="https://github.com/tianqiaimanfan/tianqiaimanfan"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="GitHub"
@@ -1028,7 +1029,11 @@ export function App() {
                             id="site-image-translate"
                             checked={siteState.enabled}
                             disabled={siteBusy}
-                            onCheckedChange={(checked) => void updateSite({ enabled: checked })}
+                            onCheckedChange={(checked) => void updateSite(
+                              // 打开站点翻译即进入自动模式，符合「开箱即翻」的预期；
+                              // 想手动逐张点可以再把下面的自动开关关掉。
+                              checked ? { enabled: true, auto: true } : { enabled: false },
+                            )}
                           />
                           <Label htmlFor="site-image-translate">本站图片翻译</Label>
                         </div>
@@ -1098,13 +1103,20 @@ export function App() {
                     />
                   </div>
                   <div className="setting-row">
-                    <Label className="field-label">语言</Label>
-                    <SegmentedControl
-                      ariaLabel="语言"
-                      options={[
-                        { value: 'zh-CHS', label: '简体中文' },
-                        { value: 'zh-CHT', label: '繁体中文' },
-                      ]}
+                    <Label className="field-label">原文</Label>
+                    <SelectControl
+                      ariaLabel="原文语言"
+                      options={sourceLanguageOptions}
+                      value={settings.sourceLang}
+                      onChange={(value) => updateField('sourceLang', value)}
+                      disabled={loading}
+                    />
+                  </div>
+                  <div className="setting-row">
+                    <Label className="field-label">译文</Label>
+                    <SelectControl
+                      ariaLabel="译文语言"
+                      options={targetLanguageOptions}
                       value={settings.targetLang}
                       onChange={(value) => updateField('targetLang', value)}
                       disabled={loading}

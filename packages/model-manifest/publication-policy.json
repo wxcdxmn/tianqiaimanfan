@@ -20,6 +20,18 @@
       "status": "blocked",
       "reason": "The model page says Apache-2.0 while the exact ONNX metadata says Ultralytics AGPL-3.0; distribution is blocked until the conflict is resolved or the model is replaced."
     },
+    "paddleocr-v5-korean": {
+      "path": "korean_PP-OCRv5_mobile_rec.onnx",
+      "sha256": "92f0b7785e64fc9090106a241cf4c1eb97472824558272751b88a2a4476d3a08",
+      "status": "approved",
+      "reason": "Exact PaddlePaddle korean_PP-OCRv5_mobile_rec_onnx revision and SHA-256 are recorded; distribute with Apache-2.0 attribution, license, and applicable NOTICE."
+    },
+    "paddleocr-v5-korean-dictionary": {
+      "path": "korean_ppocr_v5_dict.txt",
+      "sha256": "a88071c68c01707489baa79ebe0405b7beb5cca229f4fc94cc3ef992328802d7",
+      "status": "approved",
+      "reason": "Extracted from the fixed korean_PP-OCRv5_mobile_rec_onnx inference.yml character_dict; distribute with the model's Apache-2.0 attribution and extraction record."
+    },
     "paddleocr-v6-medium": {
       "path": "PP-OCRv6_medium_rec.onnx",
       "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
