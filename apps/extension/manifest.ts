@@ -31,6 +31,13 @@ export function createExtensionManifest(target: ExtensionTarget, version: string
     version,
     description: '翻译网页漫画和图片中的文字，支持截图翻译、本地 OCR、去字排版，以及谷歌翻译和大模型翻译。',
     icons: EXTENSION_ICONS,
+    // Cross-origin isolation is what unlocks multi-threaded WASM: without it
+    // ORT clamps numThreads to 1 and the CPU fallback crawls. `credentialless`
+    // keeps cross-origin images (which we fetch with host permissions, and
+    // which usually have no CORP header) loadable. Only extension documents are
+    // affected — content scripts keep running in the page's own context.
+    cross_origin_embedder_policy: { value: 'credentialless' },
+    cross_origin_opener_policy: { value: 'same-origin' },
     commands: {
       'start-screenshot-translate': {
         suggested_key: {
