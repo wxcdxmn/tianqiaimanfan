@@ -72,6 +72,22 @@ describe('assessResidualInk', () => {
     expect(shouldRepairResidual(result)).toBe(false);
   });
 
+  it('插画大色块连成片时不修（长条图涂花的回归）', () => {
+    const original = flatCanvas(240);
+    // 20×12 的纯色块：和「整行文字」一样偏离背景，但它连成大片。
+    for (let y = 3; y < 15; y += 1) {
+      for (let x = 6; x < 26; x += 1) {
+        const p = (y * W + x) * 4;
+        original[p] = 20;
+        original[p + 1] = 20;
+        original[p + 2] = 20;
+      }
+    }
+    const result = assessResidualInk(original, original.slice(), W, H, BOX)!;
+    expect(result.hasLargeBlob).toBe(true);
+    expect(shouldRepairResidual(result)).toBe(false);
+  });
+
   it('没有笔画时返回 inkCount 极小，不修', () => {
     const original = flatCanvas(240);
     const cleaned = flatCanvas(240);

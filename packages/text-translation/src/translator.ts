@@ -238,17 +238,25 @@ async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
   if (failed.length === 0) {
     return 0;
   }
-  // 拟声词/OCR 噪声不必发 LLM：本地映射直接落地，剩下才需要真正的翻译。
+  // 拟声词/OCR 噪声不必发 LLM：拟声词本地落地，噪声保留原文不擦除，
+  // 剩下的才需要真正的翻译（也省掉无谓的「未配置 API Key」报错）。
   let localRecovered = 0;
+  const needLlm: typeof failed = [];
   for (const region of failed) {
-    const local = resolveLocalPhraseFallback(region.sourceText);
-    if (!local) continue;
-    const { translationFailed: _failed, ...rest } = region;
-    delete (region as { translationFailed?: boolean }).translationFailed;
-    Object.assign(region, rest, { translatedText: local });
-    localRecovered += 1;
+    const match = matchLocalPhrase(region.sourceText);
+    if (match?.kind === 'untranslatable') {
+      continue;
+    }
+    if (match?.kind === 'translate') {
+      const { translationFailed: _failed, ...rest } = region;
+      delete (region as { translationFailed?: boolean }).translationFailed;
+      Object.assign(region, rest, { translatedText: match.text });
+      localRecovered += 1;
+      continue;
+    }
+    needLlm.push(region);
   }
-  failed = failed.filter((region) => region.translationFailed);
+  failed = needLlm;
   if (failed.length === 0) {
     return localRecovered;
   }

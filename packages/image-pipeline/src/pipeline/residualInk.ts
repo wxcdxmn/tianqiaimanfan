@@ -32,6 +32,10 @@ export type ResidualInkAssessment = {
   residualRatio: number;
   /** 擦除后「接近背景」的像素占比，太低说明这块不是干净底板，不该修。 */
   flatShare: number;
+  /** 原图里判为笔画的像素占整框比例：过大说明是插画色块，不是文字。 */
+  inkShare: number;
+  /** 存在大块连续的非背景像素（插画/网点），文字笔画不会出现。 */
+  hasLargeBlob: boolean;
 };
 
 const luma = (r: number, g: number, b: number): number => 0.299 * r + 0.587 * g + 0.114 * b;
@@ -90,6 +94,7 @@ export function assessResidualInk(
   let residualCount = 0;
   let flatCount = 0;
   const flatTolerance = 12;
+  const ink = new Uint8Array(total);
   for (let y = 0; y < rect.height; y += 1) {
     const row = ((rect.y + y) * width + rect.x) * 4;
     for (let x = 0; x < rect.width; x += 1) {
@@ -103,8 +108,38 @@ export function assessResidualInk(
         continue;
       }
       inkCount += 1;
+      ink[y * rect.width + x] = 1;
       if (Math.abs(after - median) > RESIDUAL_KEEP_DELTA) {
         residualCount += 1;
+      }
+    }
+  }
+
+  // 插画色块会连成大片「非背景」区域，文字笔画不会。用 12×12 滑窗（积分图）
+  // 找是否存在几乎整块都是笔画的地方：一旦命中，整个框都不参与修复。
+  let hasLargeBlob = false;
+  const window = Math.min(12, rect.width, rect.height);
+  if (window >= 8 && inkCount > 0) {
+    const sum = new Uint32Array((rect.height + 1) * (rect.width + 1));
+    const stride = rect.width + 1;
+    for (let y = 0; y < rect.height; y += 1) {
+      let rowSum = 0;
+      for (let x = 0; x < rect.width; x += 1) {
+        rowSum += ink[y * rect.width + x];
+        sum[(y + 1) * stride + x + 1] = sum[y * stride + x + 1] + rowSum;
+      }
+    }
+    const threshold = Math.ceil(window * window * 0.72);
+    for (let y = 0; y + window <= rect.height && !hasLargeBlob; y += 1) {
+      for (let x = 0; x + window <= rect.width; x += 1) {
+        const count = sum[(y + window) * stride + x + window]
+          - sum[y * stride + x + window]
+          - sum[(y + window) * stride + x]
+          + sum[y * stride + x];
+        if (count >= threshold) {
+          hasLargeBlob = true;
+          break;
+        }
       }
     }
   }
@@ -115,6 +150,8 @@ export function assessResidualInk(
     residualCount,
     residualRatio: inkCount > 0 ? residualCount / inkCount : 0,
     flatShare: flatCount / total,
+    inkShare: inkCount / total,
+    hasLargeBlob,
   };
 }
 
@@ -128,6 +165,11 @@ export function shouldRepairResidual(assessment: ResidualInkAssessment | null): 
   }
   // 底板不干净（插画、网点、渐变很重）时不要盲修，容易把画面涂花。
   if (assessment.flatShare < 0.5) {
+    return false;
+  }
+  // 原图里近半数像素都偏离「背景色」时，说明这不是浅底上的文字，
+  // 而是有底色的插画块 / 高饱和网点；整块修会把画面抹成几何色块。
+  if (assessment.inkShare > 0.42 || assessment.hasLargeBlob) {
     return false;
   }
   return assessment.residualRatio >= RESIDUAL_REPAIR_RATIO;
@@ -180,6 +222,14 @@ export function repairResidualInk(
         }
       }
     }
+  }
+
+  // 最后一道闸：要涂的面积超过整框 45% 时放弃。极端文字框也不会占这么大，
+  // 否则一旦前面的判定被绕过，就会把整块插画涂成灰色。
+  let grownCount = 0;
+  for (let i = 0; i < total; i += 1) grownCount += grown[i];
+  if (grownCount > total * 0.45) {
+    return 0;
   }
 
   // 从「本来就没有笔画」的像素往内一层层推：每一轮只填「有已填邻居」的像素，
