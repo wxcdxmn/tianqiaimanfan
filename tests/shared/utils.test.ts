@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { toErrorMessage } from "../../apps/extension/src/shared/utils";
+import { TranslationExecutionError } from "../../packages/translator-core/src/index";
 
 describe("toErrorMessage", () => {
   it("returns Error.message for Error instances", () => {
@@ -17,6 +18,18 @@ describe("toErrorMessage", () => {
     expect(toErrorMessage({
       messageKey: "pipeline.failure.runtime",
     })).toBe("本地图片处理失败");
+  });
+
+  it("maps TranslationExecutionError through its messageKey getter", () => {
+    const error = new TranslationExecutionError({
+      code: "PIPELINE_STAGE_FAILED",
+      stage: "translate",
+      scope: "image",
+      retryable: false,
+      messageKey: "pipeline.failure.stage",
+    });
+
+    expect(toErrorMessage(error)).toBe("文本翻译失败");
   });
 
   it("returns string itself for string input", () => {

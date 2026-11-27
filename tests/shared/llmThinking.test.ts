@@ -40,6 +40,21 @@ describe('built-in LLM thinking capabilities', () => {
     }
   });
 
+  it('omits the thinking field for GLM free flash models so the preset matches the custom-model path', () => {
+    for (const model of ['glm-4.7-flash', 'glm-4.5-flash']) {
+      const body = { model, messages: [] };
+      const preset = adaptLlmThinkingChatCompletionRequest(body, { provider: 'glm', model, level: 'off' });
+      const custom = adaptLlmThinkingChatCompletionRequest(body, {
+        provider: 'glm', model, level: 'off', useCustomModel: true,
+      });
+      expect(preset).not.toHaveProperty('thinking');
+      expect(preset).toEqual(custom);
+    }
+    expect(adaptLlmThinkingChatCompletionRequest({ model: 'glm-4.7-flash', messages: [] }, {
+      provider: 'glm', model: 'glm-4.7-flash', level: 'on',
+    }).thinking).toEqual({ type: 'enabled' });
+  });
+
   it.each(['deepseek-flash', 'deepseek-v4-pro'])('sends the supported DeepSeek low effort for %s', (model) => {
     expect(adaptLlmThinkingChatCompletionRequest({ model, messages: [] }, {
       provider: 'deepseek', model, level: 'low',

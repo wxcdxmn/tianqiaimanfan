@@ -43,6 +43,15 @@ export class TranslationExecutionError extends Error {
     return this.failure.code;
   }
 
+  /**
+   * 错误文案映射（toErrorMessage）靠这个字段把 messageKey 翻成中文。
+   * 之前只把 messageKey 塞进 message，导致页面上直接显示
+   * `pipeline.failure.stage` 这种原始 key。
+   */
+  get messageKey(): string {
+    return this.failure.messageKey;
+  }
+
   get stage(): string | undefined {
     return this.failure.stage;
   }

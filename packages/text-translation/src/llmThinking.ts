@@ -325,6 +325,12 @@ export function adaptLlmThinkingChatCompletionRequest(
   }
 
   if (context.provider === 'glm' || context.provider === 'doubao') {
+    // 智谱免费 flash 档不认 thinking 字段，带上会直接 400：
+    // 表现就是「下拉选 glm-4.7-flash 必失败，勾自定义手输同名模型反而能通」。
+    // 关闭思考本来等于默认行为，干脆不发这个字段。
+    if (context.provider === 'glm' && level === 'off' && /flash/iu.test(context.model)) {
+      return request;
+    }
     request.thinking = {
       type: level === 'off' ? 'disabled' : 'enabled',
     };
