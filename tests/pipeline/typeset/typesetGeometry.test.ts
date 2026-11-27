@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { BubbleMask, TextRegion } from "../../../packages/image-pipeline/src/types";
-import { computeFullVerticalTypeset } from "../../../packages/image-pipeline/src/pipeline/typeset/verticalLayout";
+import { computeFullVerticalTypeset, verticalMinReadableFontSize } from "../../../packages/image-pipeline/src/pipeline/typeset/verticalLayout";
 import { calcVertical, queryMaskMaxY } from "../../../packages/image-pipeline/src/pipeline/typeset/verticalFit";
 
 function parseCanvasFontSize(font: string, fallback: number): number {
@@ -201,11 +201,15 @@ describe("computeFullVerticalTypeset source style", () => {
     });
 
     expect(result.initialFontSize).toBe(20);
-    expect(result.fittedFontSize).toBe(10);
-    expect(result.columns).toHaveLength(1);
-    expect(result.columns[0].glyphs.every((glyph) => glyph.advanceY === 10)).toBe(true);
+    // 旧逻辑缩到 10px(源字号的 30%);与横排对齐后的 12px 可读下限接管。
+    // 12px 下 10 个字超出单列高度,按可读性优先折成两列;源几何保持列距,advanceY=13。
+    expect(result.fittedFontSize).toBe(12);
+    expect(result.columns).toHaveLength(2);
+    expect(
+      result.columns.every((column) => column.glyphs.every((glyph) => glyph.advanceY === 13)),
+    ).toBe(true);
     expect(result.expandedRegion.box).toEqual(region.box);
-    expect(result.layoutDiagnostics.uniformScale).toBe(0.5);
+    expect(result.layoutDiagnostics.uniformScale).toBe(0.6);
   });
 
   it("shrinks when trailing kinsoku punctuation makes a column too tall", () => {
@@ -307,5 +311,30 @@ describe("computeFullVerticalTypeset source style", () => {
     expect(result.layoutDiagnostics.layoutContentHeight).toBeGreaterThan(100);
     expect(result.layoutDiagnostics.renderContentHeight).toBe(result.layoutDiagnostics.layoutContentHeight);
     expect(result.verticalContentHeight).toBe(result.layoutDiagnostics.layoutContentHeight);
+  });
+
+  it("fits width for plain regions too, not only source-anchored ones", () => {
+    // 无源几何(大多数普通气泡)时,旧逻辑不检查 paintedGroupWidth,
+    // 超宽的列会被 renderVertical 的固定宽度画布静默裁掉。
+    const translatedText = "甲乙丙丁戊己庚辛壬癸甲乙丙丁戊己庚辛壬癸";
+    const region = createSourceStyledRegion({
+      box: { x: 0, y: 0, width: 40, height: 140 },
+      sourceText: "日日日日日",
+      translatedText,
+      translatedColumns: undefined as unknown as string[],
+      sourceLineGeometries: undefined as unknown as TextRegion["sourceLineGeometries"],
+    });
+    const result = computeFullVerticalTypeset({
+      region,
+      fontFamily: "sans-serif",
+      measureCtx: createScaledMockCtx(),
+    });
+
+    // 二分搜索把字号压到宽度放得下为止,而不是任由列溢出画布;
+    // 同时可读下限保证最终字号不低于 12px。
+    const paintedGroupWidth = result.fittedFontSize
+      + (result.columns.length - 1) * (result.metrics.colWidth + result.metrics.colSpacing);
+    expect(paintedGroupWidth).toBeLessThanOrEqual(result.contentWidth + 0.5);
+    expect(result.fittedFontSize).toBeGreaterThanOrEqual(verticalMinReadableFontSize);
   });
 });

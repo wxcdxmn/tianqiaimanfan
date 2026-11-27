@@ -69,7 +69,6 @@ async function withModelGate<T>(model: string, run: () => Promise<T>): Promise<T
   if (gate.active < gate.limit) {
     gate.active += 1;
   } else {
-    // 槽位由释放方直接转交，这里不再自增，避免并发数被算高。
     await new Promise<void>((resolve) => gate.waiters.push(resolve));
   }
   try {
@@ -81,11 +80,14 @@ async function withModelGate<T>(model: string, run: () => Promise<T>): Promise<T
     }
     throw error;
   } finally {
-    const next = gate.waiters.shift();
-    if (next) {
-      next();
-    } else {
-      gate.active = Math.max(0, gate.active - 1);
+    // 标准信号量释放:先归还槽位,再按当前限额唤醒等待者。
+    // 旧实现把槽位无条件转交给下一个等待者,429 降级后并发数永远降不下来
+    // (释放方转交绕过 limit=1 的检查),持续流量下一直保持 2 路。
+    gate.active = Math.max(0, gate.active - 1);
+    while (gate.active < gate.limit && gate.waiters.length > 0) {
+      gate.active += 1;
+      const next = gate.waiters.shift();
+      next?.();
     }
   }
 }

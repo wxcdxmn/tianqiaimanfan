@@ -11,6 +11,12 @@ export class SerialTaskQueue<T> {
   private readonly closedSessions = new Map<string, unknown>();
   private active = false;
 
+  /**
+   * 已关闭会话记录的上限:MV3 service worker 长存活期内页面会不断开关,
+   * 这里的条目(各带一个带栈的 Error)只增不减会无限增长;按插入序淘汰最旧。
+   */
+  private static readonly maxClosedSessions = 256;
+
   enqueue(
     run: () => Promise<T> | T,
     contentSessionId?: string,
@@ -33,6 +39,11 @@ export class SerialTaskQueue<T> {
     contentSessionId: string,
     reason: unknown = new Error('来源页面已关闭'),
   ): number {
+    while (this.closedSessions.size >= SerialTaskQueue.maxClosedSessions) {
+      const oldest = this.closedSessions.keys().next().value;
+      if (oldest === undefined) break;
+      this.closedSessions.delete(oldest);
+    }
     this.closedSessions.set(contentSessionId, reason);
     let cancelled = 0;
     for (let index = this.pending.length - 1; index >= 0; index -= 1) {

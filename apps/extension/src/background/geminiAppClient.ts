@@ -337,6 +337,28 @@ function normalizeGeneratedImageUrl(url: string): string {
   return `${url}=s2048-rj`;
 }
 
+/**
+ * 译图下载允许携带 Google 会话 Cookie 的域名。
+ *
+ * 译图 URL 来自模型响应,内容本身可能影响返回结果(prompt 注入面);
+ * Cookie 头一旦跟随任意 URL,整套 SID/1PSID 就可能被诱导发往第三方域。
+ * 只有 Google 图片 CDN 的域名才允许带 Cookie,其余域降级为无凭证请求。
+ */
+const generatedImageCookieHostSuffixes = ['googleusercontent.com', 'ggpht.com'] as const;
+
+export function hostMayReceiveGeminiCookie(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return false;
+    const hostname = parsed.hostname.toLowerCase();
+    return generatedImageCookieHostSuffixes.some((suffix) => (
+      hostname === suffix || hostname.endsWith(`.${suffix}`)
+    ));
+  } catch {
+    return false;
+  }
+}
+
 function base64ToBlob(base64: string, contentType: string): Blob {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -678,12 +700,13 @@ async function downloadGeneratedImage(url: string, cookieHeader: string | null):
   base64: string;
   contentType: string;
 }> {
-  const response = await fetchWithTimeout(normalizeGeneratedImageUrl(url), {
+  const target = normalizeGeneratedImageUrl(url);
+  const response = await fetchWithTimeout(target, {
     method: 'GET',
     headers: {
       Origin: 'https://gemini.google.com',
       Referer: 'https://gemini.google.com/',
-      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      ...(cookieHeader && hostMayReceiveGeminiCookie(target) ? { Cookie: cookieHeader } : {}),
     },
   }, 120_000);
   if (!response.ok) {

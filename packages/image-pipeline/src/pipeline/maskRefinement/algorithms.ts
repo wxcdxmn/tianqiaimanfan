@@ -652,10 +652,14 @@ export function fillInkInFlatBox(
 
   const flatShare = flatCount / total;
   const inkShare = inkCount / total;
-  if (flatShare < (options.minFlatShare ?? 0.45)) {
+  // 阈值与 residualInk.shouldRepairResidual 对齐（flatShare>=0.5、inkShare<=0.42）：
+  // 那边是"残留修复"的护栏，这里如果放得更宽，同一块深色网点/贴图（inkShare
+  // 0.42~0.6）会被残留修复拒绝、却被这里的兜底上墨整块标成待擦、涂成底色——
+  // 正是护栏要防的事。上面的 mask 仍会返回给调用方做诊断展示。
+  if (flatShare < (options.minFlatShare ?? 0.5)) {
     return null;
   }
-  if (inkShare < (options.minInkShare ?? 0.01) || inkShare > (options.maxInkShare ?? 0.6)) {
+  if (inkShare < (options.minInkShare ?? 0.01) || inkShare > (options.maxInkShare ?? 0.42)) {
     return null;
   }
   return {

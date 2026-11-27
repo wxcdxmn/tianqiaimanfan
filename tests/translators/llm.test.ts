@@ -724,6 +724,34 @@ describe('免费档位并发门', () => {
     expect(state.peak).toBe(1);
   });
 
+  it('降级后已在等待队列里的请求也不越过 1 路并发', async () => {
+    // 旧实现的槽位转交绕过降级后的限额:A、B 撞 429 时 C/D 已在等待,
+    // A 释放槽位直接转交 C,C 与仍在途的 B 形成两路并发。
+    const state = { inFlight: 0, peak: 0 };
+    let attempt = 0;
+    const transport: TextTranslationTransport = {
+      requestChatCompletion: async () => {
+        attempt += 1;
+        if (attempt <= 2) {
+          throw Object.assign(new Error('429 Too Many Requests'), { status: 429 });
+        }
+        state.inFlight += 1;
+        state.peak = Math.max(state.peak, state.inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        state.inFlight -= 1;
+        return { choices: [{ message: { content: '译文' } }] } as never;
+      },
+      translatePlain: vi.fn(async () => '译文'),
+    };
+    await Promise.allSettled([
+      callWith('glm-4.7-flash', transport),
+      callWith('glm-4.7-flash', transport),
+      callWith('glm-4.7-flash', transport),
+      callWith('glm-4.7-flash', transport),
+    ]);
+    expect(state.peak).toBe(1);
+  });
+
   it('付费模型仍然并发，不被免费档的队列拖慢', async () => {
     const { state, transport } = makeConcurrencyProbe();
     await Promise.all([callWith('glm-5.3', transport), callWith('glm-5.3', transport)]);

@@ -149,6 +149,56 @@ describe('diagnostic log store export', () => {
     expect(exported.text).not.toContain(longPrompt);
   });
 
+  it('导出时剥除请求/响应内容字段，只保留计时与状态元数据', async () => {
+    const eventWithContent = {
+      ...createStoredEvent(0),
+      category: 'llm.api',
+      message: 'deepseek LLM 请求完成',
+      data: {
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        durationMs: 1234,
+        messageCount: 2,
+        requestBody: {
+          model: 'deepseek-chat',
+          messages: [{ role: 'user', content: '请把以下文本从日文翻译成简体中文。原文：せやな' }],
+        },
+        responseData: {
+          choices: [{ message: { content: '是啊。' } }],
+        },
+        rawResponse: '是啊。',
+        responseText: '是啊。',
+      },
+    };
+    installStorage({ events: [eventWithContent] });
+
+    const exported = await exportDiagnosticLog();
+
+    expect(exported.eventCount).toBe(1);
+    // 元数据保留,内容剥除。
+    expect(exported.text).toContain('deepseek');
+    expect(exported.text).toContain('"durationMs":1234');
+    expect(exported.text).toContain('[REDACTED_CONTENT:requestBody]');
+    expect(exported.text).toContain('[REDACTED_CONTENT:responseData]');
+    expect(exported.text).toContain('[REDACTED_CONTENT:rawResponse]');
+    expect(exported.text).toContain('[REDACTED_CONTENT:responseText]');
+    expect(exported.text).not.toContain('せやな');
+    expect(exported.text).not.toContain('是啊');
+  });
+
+  it('不改动无内容字段事件的存储原值,其余字段原样导出', async () => {
+    const plainEvent = {
+      ...createStoredEvent(0),
+      data: { stage: 'ocr', durationMs: 42, requestBodyBytes: 1024 },
+    };
+    installStorage({ events: [plainEvent] });
+
+    const exported = await exportDiagnosticLog();
+
+    expect(exported.text).toContain('"requestBodyBytes":1024');
+    expect(exported.text).not.toContain('REDACTED_CONTENT');
+  });
+
   it('does not mutate storage while reading and writes back the recovered store on the next append', async () => {
     const invalidEvent = {
       ...createStoredEvent(1),

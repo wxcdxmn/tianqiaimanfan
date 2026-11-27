@@ -2,6 +2,9 @@ import type { TextRegion, TypesetLayoutDiagnostics } from "../../types";
 import type { PipelineRenderingContext } from "../../runtime/platform";
 import { formatTypesetFont } from "./fontRuntime";
 
+/** 竖排最小可读字号，与 horizontalLayout.horizontalMinReadableFontSize 对齐。 */
+export const verticalMinReadableFontSize = 12;
+
 // ---------------------------------------------------------------------------
 // Entry function: computeFullVerticalTypeset
 // ---------------------------------------------------------------------------
@@ -202,7 +205,11 @@ export function computeFullVerticalTypeset(
     ));
     return (
       candidate.columns.length > targetColumnCount ||
-      (Boolean(sourceGeometryProfile) && paintedGroupWidth > contentWidth + 0.5) ||
+      // 宽度溢出对所有布局生效(原来只查源几何锚定的情况)。没有这条时,
+      // 普通气泡的列数/列宽超出气泡宽度不会被二分搜索纠偏,
+      // renderVertical 的 offscreen 画布按 contentWidth 固定,超宽的列
+      // 会被静默裁掉——左侧列整列消失。
+      paintedGroupWidth > contentWidth + 0.5 ||
       hasHeightOverflow
     );
   };
@@ -349,6 +356,18 @@ export function computeFullVerticalTypeset(
         activePerColumnAdvanceScales = bestProfile.perColumnAdvanceScale;
       }
     }
+  }
+
+  // 最小可读字号兜底:与横排对齐(horizontalLayout 的 minReadableFontSize)。
+  // 竖排原来只落到 minFontSafetySize(8px),窄列里的译文会小到读不清;
+  // 横排早已固定在 12px 下限。竖排的「框过小」轴是宽度,故与 quad 宽度取 min。
+  const minReadableFontSize = Math.max(
+    minFontSafetySize,
+    Math.min(verticalMinReadableFontSize, Math.ceil(regionQuadDims.width)),
+  );
+  if (fontSize < minReadableFontSize) {
+    fontSize = minReadableFontSize;
+    layout = buildVerticalLayout(measureCtx, text, layoutContentHeight, minReadableFontSize, ff, verticalLayoutOptions);
   }
 
   const { columns, columnBreakReasons, columnSegmentIds, columnSegmentSources, metrics } = layout;

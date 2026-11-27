@@ -61,6 +61,8 @@ export function createPageImageCache(options: {
   const leases = new Map<number, Lease>();
   const endedSessions = new Set<string>();
   let nextRuleId = firstRuleId;
+  /** 已结束会话记录上限,见 cancelForSession 内的淘汰逻辑。 */
+  const maxEndedSessions = 256;
 
   // Session rules outlive a service worker, so remove leases left by its previous run.
   const initialization = supported ? (async () => {
@@ -167,6 +169,13 @@ export function createPageImageCache(options: {
       await removeLease(ruleId, lease);
     },
     async cancelForSession(contentSessionId: string): Promise<void> {
+      // 已结束会话只用于拦截迟到的 prepare(),永不清理会随页面开关无限增长;
+      // 按插入序淘汰最旧(会话 id 是一次性的,淘汰旧 id 不会误放行新会话)。
+      while (endedSessions.size >= maxEndedSessions) {
+        const oldest = endedSessions.values().next().value;
+        if (oldest === undefined) break;
+        endedSessions.delete(oldest);
+      }
       endedSessions.add(contentSessionId);
       await Promise.allSettled([...leases].filter(([, lease]) => (
         lease.contentSessionId === contentSessionId

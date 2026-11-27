@@ -152,4 +152,21 @@ describe('AutoTranslationScheduler', () => {
 
     expect(started).toEqual(['a']);
   });
+
+  it('drops queued targets that left the window so long sessions do not retain DOM nodes', async () => {
+    const harness = createHarness({ a: 0, b: 1, c: 2 }, { concurrency: 1, windowSize: 2 });
+    const targets = [createTarget('a'), createTarget('b'), createTarget('c')];
+
+    harness.scheduler.plan(targets);
+    expect(harness.started).toEqual(['a']);
+    // B 已入队但未启动;窗口滚到 C 后 B 出窗,不应滞留在 targets 里持有节点。
+    harness.scrollTo({ c: 0 });
+    harness.scheduler.plan([targets[2]]);
+    expect(harness.scheduler.queuedKeys).toEqual(['c']);
+    expect(harness.scheduler.targetCount).toBe(1);
+
+    await harness.finish('a');
+    harness.scheduler.plan([targets[2]]);
+    expect(harness.scheduler.targetCount).toBe(1);
+  });
 });

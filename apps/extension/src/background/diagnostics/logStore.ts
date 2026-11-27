@@ -32,6 +32,36 @@ type DiagnosticLogStore = {
 
 const diagnosticLogMaxEvents = 2000;
 
+/**
+ * 导出诊断时剥除的内容载体字段。
+ *
+ * 隐私政策 §5 承诺「导出的脱敏诊断只应包含版本、阶段、耗时、设备能力、错误码
+ * 和提供商主机」。写入侧的 `enableDebugLog`（默认关）只决定"存不存"，导出侧
+ * 必须独立兜底：调试日志一旦开启，`requestBody`（OCR 原文 + 提示词）、
+ * `responseData`/`responseText`（译文与接口原始响应）、`rawResponse`（Gemini
+ * 原始返回）都会进入事件 data，导出前在这里剥掉，保留计时/状态/错误码。
+ */
+const exportRedactedDataKeys = new Set(['requestBody', 'responseData', 'rawResponse', 'responseText']);
+
+function redactDiagnosticEventDataForExport(data: unknown): unknown {
+  if (!isRecord(data)) return data;
+  let touched = false;
+  const next: Record<string, unknown> = { ...data };
+  for (const key of Object.keys(next)) {
+    if (exportRedactedDataKeys.has(key) && next[key] !== undefined) {
+      next[key] = `[REDACTED_CONTENT:${key}]`;
+      touched = true;
+    }
+  }
+  return touched ? next : data;
+}
+
+function redactDiagnosticEventForExport(event: DiagnosticLogEvent): DiagnosticLogEvent {
+  if (!isRecord(event.data)) return event;
+  const data = redactDiagnosticEventDataForExport(event.data);
+  return data === event.data ? event : { ...event, data } as DiagnosticLogEvent;
+}
+
 function normalizeStoredDiagnosticLogEvent(value: unknown): DiagnosticLogEvent | null {
   if (
     !isRecord(value) ||
@@ -273,7 +303,7 @@ export async function exportDiagnosticLog(): Promise<DiagnosticLogTextExport> {
   const settings = await getSettings();
   const chromeApi = getExtensionApi();
   const manifest = chromeApi?.runtime?.getManifest?.();
-  const events = store.events;
+  const events = store.events.map(redactDiagnosticEventForExport);
   const exportedAt = new Date().toISOString();
   const extension = {
     version: manifest?.version,

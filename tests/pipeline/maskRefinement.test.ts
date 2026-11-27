@@ -114,4 +114,26 @@ describe('flat box ink fill', () => {
     const clamped = fillInkInFlatBox(gray, width, height, { x: 16, y: 6, width: 40, height: 40 });
     expect(clamped?.rect).toEqual({ x: 16, y: 6, width: 14, height: 14 });
   });
+
+  it('refuses boxes with an illustration patch whose ink share the old threshold (0.6) would accept', () => {
+    const width = 40, height = 30;
+    const gray = makeFlatImage(width, height);
+    // 一整块 22×20 的深色斑:inkShare≈0.47,旧上限 0.6 会整块上墨(涂花插画),
+    // 与 residualInk 对齐后的 0.42 拒绝。
+    paintRect(gray, width, { x: 6, y: 4, width: 22, height: 20 }, 40);
+    const result = fillInkInFlatBox(gray, width, height, { x: 2, y: 2, width: 36, height: 26 });
+    expect(result).toBeNull();
+  });
+
+  it('still accepts a line of text whose strokes cover a normal share of the box', () => {
+    const width = 60, height = 40;
+    const gray = makeFlatImage(width, height);
+    // 一行三个独立笔画块,合计 inkShare≈0.20,远低于 0.42 上限。
+    paintRect(gray, width, { x: 8, y: 14, width: 14, height: 8 }, 40);
+    paintRect(gray, width, { x: 24, y: 14, width: 10, height: 8 }, 40);
+    paintRect(gray, width, { x: 40, y: 14, width: 4, height: 8 }, 40);
+    const result = fillInkInFlatBox(gray, width, height, { x: 4, y: 10, width: 44, height: 18 });
+    expect(result).not.toBeNull();
+    expect(result!.mask[4 * result!.rect.width + 8]).toBe(1);
+  });
 });

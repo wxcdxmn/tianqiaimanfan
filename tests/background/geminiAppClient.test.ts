@@ -6,6 +6,7 @@ import {
   getGeminiAppModelMetadataLabel,
   getGeminiAppModelRequestHeaders,
   getGeminiAppRawResponse,
+  hostMayReceiveGeminiCookie,
   parseGeminiAccountStatus,
   runGeminiAppImageTranslate,
 } from "../../apps/extension/src/background/geminiAppClient";
@@ -292,5 +293,23 @@ describe("Gemini App model selection", () => {
     expect(getGeminiAppModelRequestHeaders("nano_banana_pro")).toMatchObject({
       "x-goog-ext-525001261-jspb": expect.stringContaining("e6fa609c3fa255c0"),
     });
+  });
+});
+
+describe("Gemini App generated image cookie scope", () => {
+  it("只允许 Google 图片 CDN 域名携带会话 Cookie", () => {
+    expect(hostMayReceiveGeminiCookie("https://lh3.googleusercontent.com/abc=s2048-rj")).toBe(true);
+    expect(hostMayReceiveGeminiCookie("https://lh6.ggpht.com/abc")).toBe(true);
+    expect(hostMayReceiveGeminiCookie("https://googleusercontent.com/abc")).toBe(true);
+    // 伪装后缀(非子域)与外域必须拒绝。
+    expect(hostMayReceiveGeminiCookie("https://evil-googleusercontent.com/abc")).toBe(false);
+    expect(hostMayReceiveGeminiCookie("https://example.com/googleusercontent.com/abc")).toBe(false);
+    expect(hostMayReceiveGeminiCookie("https://attacker.example/abc")).toBe(false);
+  });
+
+  it("拒绝非 HTTPS 与非法 URL", () => {
+    expect(hostMayReceiveGeminiCookie("http://lh3.googleusercontent.com/abc")).toBe(false);
+    expect(hostMayReceiveGeminiCookie("not-a-url")).toBe(false);
+    expect(hostMayReceiveGeminiCookie("")).toBe(false);
   });
 });

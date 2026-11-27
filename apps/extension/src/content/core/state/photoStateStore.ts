@@ -38,7 +38,14 @@ export class PhotoStateStore {
 
   ensure(key: string, originalUrl: string): PhotoState {
     const existing = this.states.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // 刷新 LRU 插入序:显示中的 key 每次 sync 都会 ensure,若不刷新会一直
+      // 排在 Map 最前,超出 cacheLimit 时 trim() 会先把它们逐出并回收译图
+      // URL(protect 只在编辑器激活期间持有)。长章回滚时表现为早期译图失效。
+      this.states.delete(key);
+      this.states.set(key, existing);
+      return existing;
+    }
 
     const state = createInitialPhotoState(originalUrl);
     this.states.set(key, state);

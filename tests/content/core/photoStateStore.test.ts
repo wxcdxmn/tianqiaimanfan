@@ -82,4 +82,21 @@ describe('PhotoStateStore', () => {
     expect(store.get('active')).toBeUndefined();
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:active');
   });
+
+  it('refreshes LRU order on ensure so a displayed state outlives newer inserts', () => {
+    const revokeObjectURL = vi.fn();
+    const store = new PhotoStateStore(2, { revokeObjectURL });
+    const displayed = store.ensure('displayed', 'https://example.com/displayed.jpg');
+    displayed.translatedUrl = 'blob:displayed';
+    store.ensure('image-2', 'https://example.com/two.jpg');
+    // sync 在新条目挂载后会对所有 mounted key 再 ensure;刷新插入序后 displayed 应排到最新。
+    store.ensure('displayed', 'https://example.com/displayed.jpg');
+
+    // 插入第三个条目时,应逐出未被刷新的 image-2,而不是显示中的 displayed。
+    store.ensure('image-3', 'https://example.com/three.jpg');
+
+    expect(store.get('displayed')).toBe(displayed);
+    expect(store.get('image-2')).toBeUndefined();
+    expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:displayed');
+  });
 });

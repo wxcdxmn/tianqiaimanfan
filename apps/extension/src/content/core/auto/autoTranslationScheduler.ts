@@ -63,6 +63,11 @@ export class AutoTranslationScheduler {
     return this.queue;
   }
 
+  /** 当前滞留在 targets 表里的条目数;plan 按窗口重建后应 ≤ 窗口 + in-flight。 */
+  get targetCount(): number {
+    return this.targets.size;
+  }
+
   /**
    * Re-plan from the adapter's current target list. Cheap enough to run on
    * every viewport sync; callers pass the targets already mounted on the page.
@@ -87,9 +92,24 @@ export class AutoTranslationScheduler {
 
     // The queue is fully derived from the current window, so pages that left the
     // viewport are dropped and the remaining ones are re-ordered by priority.
+    // targets 同样按窗口重建:旧实现只增不减,working 中或被挤出窗口的条目
+    // 会永久滞留(条目持有 ImageTarget.element,即已脱离 DOM 的图片节点),
+    // 长章滚动会话持续累积。in-flight 的条目必须保留(pump 释放时要查)。
+    const nextTargets = new Map<string, ImageTarget>();
+    for (const { target } of ranked) {
+      nextTargets.set(target.key, target);
+    }
+    for (const key of this.inFlight) {
+      const retained = this.targets.get(key) ?? nextTargets.get(key);
+      if (retained) nextTargets.set(key, retained);
+    }
+    this.targets.clear();
+    for (const [key, target] of nextTargets) {
+      this.targets.set(key, target);
+    }
+
     const nextQueue: string[] = [];
     for (const { target } of ranked) {
-      this.targets.set(target.key, target);
       if (this.inFlight.has(target.key)) continue;
       if (stateByKey.get(target.key) !== 'idle') continue;
       nextQueue.push(target.key);
