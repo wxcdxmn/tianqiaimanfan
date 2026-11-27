@@ -24,7 +24,7 @@ import { preparePaddleOcrRuntime, warmupPaddleOcrRuntime } from "./ocr/paddleocr
 import { prepareInpaintSource, runInpaint, type PreparedInpaintSource } from "./inpaint";
 import { drawTypeset } from "./typeset";
 import { drawRegions } from "./visualize";
-import { mergeTextLines } from "./textlineMerge";
+import { mergeStackedTextFragments, mergeTextLines } from "./textlineMerge";
 import {
   filterOcrRegions,
 } from "./ocrPostFilter";
@@ -53,6 +53,13 @@ import {
 } from "@shinobu/image-pipeline";
 
 type ProgressCallback = (progress: PipelineProgress) => void;
+
+/**
+ * 换模型补识别的触发门槛：既要有足够多的漏识框（避免为 1-2 个音效字多跑一遍模型），
+ * 也要漏识占比足够高（正常页面偶发漏一两行不值得换模型）。
+ */
+const MIN_OCR_ALTERNATE_MODEL_REGIONS = 3;
+const MIN_OCR_ALTERNATE_MODEL_SHARE = 0.25;
 
 export type PipelineRunOptions = {
   signal?: AbortSignal;
@@ -746,6 +753,64 @@ export async function runPipeline(
     }
   }
 
+  /**
+   * 换模型补识别。
+   *
+   * provider 只返回识别通过的框，被读空的框不会出现在 ocrResult.regions 里，
+   * 这些区域后续既不翻译也不擦除，就是读者看到的"明明有对白却没翻"。
+   * 当漏识比例偏高时（门控选错模型、某一模型读不了这种字形），用另一个识别模型
+   * 对这些框再跑一次，只写回通过可用性校验的结果，擦除仍使用原始紧框。
+   */
+  async function retryMissedRegionsWithAlternateModel(
+    detected: TextRegion[],
+    ocr: { debug: { languageGate?: { chosen: string } }; regions: TextRegion[] },
+  ): Promise<void> {
+    if (detected.length === 0) return;
+    const acceptedIds = new Set(latestRegions.map((region) => region.id));
+    const missed = detected.filter((region) => !acceptedIds.has(region.id));
+    if (missed.length < MIN_OCR_ALTERNATE_MODEL_REGIONS) return;
+    if (missed.length / detected.length < MIN_OCR_ALTERNATE_MODEL_SHARE) return;
+
+    const currentModel = ocr.debug.languageGate?.chosen ?? config.ocrEngine ?? "";
+    const currentIsKorean = /korean/i.test(currentModel);
+    const alternateEngine = currentIsKorean ? "paddleocr_v6_medium" : "paddleocr_v5_korean";
+
+    const retryInputs = missed.map((region) => ({
+      ...region,
+      box: expandOcrRetryBox(region.box, image.naturalWidth, image.naturalHeight),
+    }));
+
+    try {
+      // skipLanguageGate：换模型是明确的意图，不要再让门控把模型换回去。
+      const retry = await runOcr(image, retryInputs, alternateEngine, platform, {
+        compactActiveBatch: config.ocrCompactActiveBatch,
+        skipLanguageGate: true,
+      }, modelRuntime);
+      const originalBoxById = new Map(missed.map((region) => [region.id, region.box]));
+      const recovered = new Map<string, TextRegion>();
+      for (const region of retry.regions) {
+        if (!isUsableOcrRetry(region.sourceText, region.prob)) continue;
+        const box = originalBoxById.get(region.id);
+        recovered.set(region.id, box ? { ...region, box } : region);
+      }
+      if (recovered.size === 0) return;
+
+      // 按检测顺序重组，保持原有的阅读顺序与排版层序。
+      const keptById = new Map(latestRegions.map((region) => [region.id, region]));
+      const merged: TextRegion[] = [];
+      for (const region of detected) {
+        const hit = keptById.get(region.id) ?? recovered.get(region.id);
+        if (hit) merged.push(hit);
+      }
+      latestRegions = merged;
+      console.info(
+        `[ocr] 换模型补识别(${alternateEngine}): ${recovered.size}/${missed.length} 个漏识框恢复出原文`,
+      );
+    } catch (error) {
+      console.warn("[ocr] 换模型补识别失败，忽略:", error instanceof Error ? error.message : error);
+    }
+  }
+
   try {
     if (!stopAfterOrder && inpaintRuntimeProbeSchedule === "ocr-start") {
       startInpaintRuntimeProbe();
@@ -756,6 +821,9 @@ export async function runPipeline(
     if (!stopAfterOrder && inpaintRuntimeProbeSchedule === "current") {
       startInpaintRuntimeProbe();
     }
+    // 识别前的全部检测框：OCR provider 只返回识别通过的框，被读空的框会直接
+    // 从结果里消失（这些对白就会"检测到了但没翻"），所以要先留一份底。
+    const detectedBeforeOcr = latestRegions;
     const ocrResult = await runOcr(image, latestRegions, config.ocrEngine, platform, {
       compactActiveBatch: config.ocrCompactActiveBatch,
     }, modelRuntime);
@@ -764,6 +832,10 @@ export async function runPipeline(
     // 检测到但读空的框（描边字/上伸部下伸部被裁）向外扩一点补识别一次，
     // 读出来的结果写回同一 id，擦除仍用原始紧框。
     await retryEmptyOcrRegions();
+    throwIfCancelled(signal);
+    // 仍有大量框整条读空时，换另一个识别模型再补一次：韩文页被门控误判成默认模型、
+    // 或某一模型的词典天生读不了这种字形时，这一步能把对白救回来。
+    await retryMissedRegionsWithAlternateModel(detectedBeforeOcr, ocrResult);
     throwIfCancelled(signal);
     stageRegions.ocr = cloneTextRegions(latestRegions);
     ocrDebug = ocrResult.debug;
@@ -820,7 +892,10 @@ export async function runPipeline(
   report(onProgress, "merge", "合并文本行");
   try {
     const t0 = performance.now();
-    latestRegions = mergeTextLines(latestRegions, image.naturalWidth, image.naturalHeight);
+    const lineMerged = mergeTextLines(latestRegions, image.naturalWidth, image.naturalHeight);
+    // 兜底：把“首行窄框 + 余下多行块”这类被上游漏合的碎片合回一段，
+    // 否则两组译文会各自排版并叠在同一个气泡里。
+    latestRegions = mergeStackedTextFragments(lineMerged);
     stageRegions.merged = cloneTextRegions(latestRegions);
     stageTimings.push({ stage: "merge", label: "合并文本行", durationMs: performance.now() - t0 });
   } catch (error) {
@@ -1176,6 +1251,20 @@ export async function runPipeline(
     const [translatedRegions, inpaintedCanvas] = await Promise.all([translateTask, eraseTask]);
     throwIfCancelled(signal);
     latestRegions = translatedRegions;
+    if (config.typesetDebug) {
+      // 排版调试开启时记录每个区域的原文与译文：气泡漏翻、重复排版都靠这份数据定位。
+      logPipelineStage(options.observer, config, "pipeline.typeset", "调试：区域文本", {
+        regionCount: translatedRegions.length,
+        regions: translatedRegions.map((region) => ({
+          id: region.id.slice(0, 8),
+          box: [Math.round(region.box.x), Math.round(region.box.y), Math.round(region.box.width), Math.round(region.box.height)],
+          lines: region.originalLineCount ?? 1,
+          source: region.sourceText.slice(0, 120),
+          translated: region.translatedText.slice(0, 120),
+          failed: region.translationFailed === true,
+        })),
+      });
+    }
     cleanedCanvas = inpaintedCanvas;
     resultCanvas = cleanedCanvas;
     flushParallelTimings();

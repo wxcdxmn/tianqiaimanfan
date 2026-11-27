@@ -28,6 +28,8 @@ export type OcrResult = {
 
 type RunOcrOptions = {
   compactActiveBatch?: boolean;
+  /** 跳过语言门控，强制使用 providerName 指定的模型（换模型补识别时使用）。 */
+  skipLanguageGate?: boolean;
 };
 
 export function mapResultsToRegions(
@@ -145,6 +147,22 @@ function meanConfidence(results: Array<{ confidence?: number }>): number {
   return sum / results.length;
 }
 
+/**
+ * 门控用的模型评分。
+ *
+ * 只比较平均置信度会系统性地偏向"读得少但读得准"的模型：provider 只返回识别
+ * 通过的框，被读空的框不进入均值，于是覆盖率低的模型反而可能均值更高。
+ * 这里用「覆盖率 × 置信度」，让"能读出多少行"成为主导因素。
+ */
+function gateScore(
+  results: Array<{ confidence?: number }>,
+  sampleCount: number,
+): { coverage: number; confidence: number; score: number } {
+  const coverage = sampleCount > 0 ? Math.min(1, results.length / sampleCount) : 0;
+  const confidence = meanConfidence(results);
+  return { coverage, confidence, score: coverage * confidence };
+}
+
 function hangulShareOf(texts: readonly string[]): number {
   let hangul = 0;
   let total = 0;
@@ -178,20 +196,23 @@ async function resolveOcrModelByLanguage(
   try {
     const mediumOutput = await mediumProvider.recognize(image, sample, platform, modelRuntime);
     const koreanOutput = await koreanProvider.recognize(image, sample, platform, modelRuntime);
-    const mediumConfidence = meanConfidence(mediumOutput.results);
-    const koreanConfidence = meanConfidence(koreanOutput.results);
+    const medium = gateScore(mediumOutput.results, sample.length);
+    const korean = gateScore(koreanOutput.results, sample.length);
     const hangulShare = hangulShareOf(koreanOutput.results.map((result) => result.text));
-    // 韩文页：韩文模型读出谚文且明显更自信；默认模型对谚文只会输出乱码。
-    // 日文/中文页：韩文模型词典里没有假名/汉字，只能输出低置信度乱码，比较后仍用默认模型。
-    const chooseKorean = hangulShare >= KOREAN_GATE_HANGUL_SHARE && koreanConfidence > mediumConfidence;
+    // 韩文页：韩文模型读出谚文，并且"覆盖 × 置信度"更高。
+    // 默认模型对谚文只会输出乱码或读空，因此按覆盖率加权后不会再被少量高置信样本误导。
+    // 日文/中文页：韩文模型词典里没有假名/汉字，覆盖率与置信度都低，仍用默认模型。
+    const chooseKorean = hangulShare >= KOREAN_GATE_HANGUL_SHARE && korean.score > medium.score;
     const model: GateModel = chooseKorean ? "paddleocr_v5_korean" : "paddleocr_v6_medium";
     return {
       model,
       gate: {
         sampleRegionCount: sample.length,
         hangulShare,
-        mediumMeanConfidence: mediumConfidence,
-        koreanMeanConfidence: koreanConfidence,
+        mediumMeanConfidence: medium.confidence,
+        koreanMeanConfidence: korean.confidence,
+        mediumAcceptedCount: mediumOutput.results.length,
+        koreanAcceptedCount: koreanOutput.results.length,
         chosen: model,
       },
     };
@@ -209,7 +230,7 @@ export async function runOcr(
   detectedRegions: TextRegion[],
   providerName?: string,
   platform?: PlatformProvider,
-  _options?: RunOcrOptions,
+  options?: RunOcrOptions,
   modelRuntime?: ModelRuntime,
 ): Promise<OcrResult> {
   if (!platform) {
@@ -224,7 +245,7 @@ export async function runOcr(
 
   let effectiveProviderName = providerNameResolved;
   let languageGate: OcrRunDebugInfo["languageGate"];
-  if (providerNameResolved === "paddleocr_v6_medium") {
+  if (providerNameResolved === "paddleocr_v6_medium" && options?.skipLanguageGate !== true) {
     if (detectedRegions.length >= KOREAN_GATE_MIN_REGIONS) {
       // 整页调用：重新采样决策（每页语言可能不同）。
       const decision = await resolveOcrModelByLanguage(image, detectedRegions, platform, modelRuntime);

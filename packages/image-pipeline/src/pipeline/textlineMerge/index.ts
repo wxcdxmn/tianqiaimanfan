@@ -264,3 +264,198 @@ export function mergeTextLines(regions: TextRegion[], width: number, height: num
   // Build output TextRegion[]
   return groups.map((group) => buildMergedRegion(group));
 }
+
+// ---------------------------------------------------------------------------
+// 竖直堆叠碎片兜底合并
+// ---------------------------------------------------------------------------
+
+/** 横向投影重叠至少占较窄框宽度的比例。 */
+const STACK_MERGE_MIN_HORIZONTAL_OVERLAP = 0.5;
+/** 竖直间距上限（相对较矮框的高度）。 */
+const STACK_MERGE_MAX_VERTICAL_GAP_RATIO = 0.5;
+/** 两框宽度最多相差的倍数。 */
+const STACK_MERGE_MAX_WIDTH_RATIO = 2.9;
+
+function rectHorizontalOverlap(a: Rect, b: Rect): number {
+  return Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+}
+
+function rectVerticalGap(a: Rect, b: Rect): number {
+  const aBottom = a.y + a.height;
+  const bBottom = b.y + b.height;
+  if (aBottom < b.y) return b.y - aBottom;
+  if (bBottom < a.y) return a.y - bBottom;
+  return 0;
+}
+
+function shouldMergeStackedFragments(a: TextRegion, b: TextRegion): boolean {
+  const ra = a.box;
+  const rb = b.box;
+  if (ra.width <= 0 || rb.width <= 0 || ra.height <= 0 || rb.height <= 0) {
+    return false;
+  }
+  const minWidth = Math.min(ra.width, rb.width);
+  const minHeight = Math.min(ra.height, rb.height);
+  if (rectHorizontalOverlap(ra, rb) / minWidth < STACK_MERGE_MIN_HORIZONTAL_OVERLAP) {
+    return false;
+  }
+  if (rectVerticalGap(ra, rb) > minHeight * STACK_MERGE_MAX_VERTICAL_GAP_RATIO) {
+    return false;
+  }
+  if (Math.max(ra.width, rb.width) / minWidth > STACK_MERGE_MAX_WIDTH_RATIO) {
+    return false;
+  }
+  // 竖排文字的“堆叠”是横向排列的，AABB 规则不适用，交给上游合并处理。
+  const direction = a.direction ?? b.direction;
+  if (direction === "v") {
+    return false;
+  }
+  return true;
+}
+
+function regionSortPoint(region: TextRegion): { x: number; y: number } {
+  return { x: region.box.x, y: region.box.y };
+}
+
+function sortStackMembers(members: TextRegion[]): TextRegion[] {
+  const vertical = members.filter((m) => m.direction === "v").length > members.length / 2;
+  return [...members].sort((a, b) => {
+    const pa = regionSortPoint(a);
+    const pb = regionSortPoint(b);
+    if (vertical) {
+      return pb.x - pa.x || pa.y - pb.y;
+    }
+    return pa.y - pb.y || pa.x - pb.x;
+  });
+}
+
+function buildStackMergedRegion(members: TextRegion[]): TextRegion {
+  const ordered = sortStackMembers(members);
+  const points: QuadPoint[] = [];
+  for (const member of ordered) {
+    if (member.quad) {
+      points.push(...member.quad);
+    } else {
+      const { x, y, width, height } = member.box;
+      points.push({ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height });
+    }
+  }
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const box: Rect = {
+    x: Math.round(Math.min(...xs)),
+    y: Math.round(Math.min(...ys)),
+    width: Math.round(Math.max(...xs) - Math.min(...xs)),
+    height: Math.round(Math.max(...ys) - Math.min(...ys)),
+  };
+
+  const mar = minAreaRect(points);
+  const vertical = ordered.filter((m) => m.direction === "v").length > ordered.length / 2;
+  const quad = (mar ? alignQuadToReferenceWidthAxis(mar.box, null) : null) ?? ([
+    { x: box.x, y: box.y },
+    { x: box.x + box.width, y: box.y },
+    { x: box.x + box.width, y: box.y + box.height },
+    { x: box.x, y: box.y + box.height },
+  ] as [QuadPoint, QuadPoint, QuadPoint, QuadPoint]);
+
+  const totalArea = ordered.reduce((sum, m) => sum + m.box.width * m.box.height, 0);
+  const weightOf = (region: TextRegion) => {
+    const area = region.box.width * region.box.height;
+    return totalArea > 0 ? area / totalArea : 1 / ordered.length;
+  };
+  let prob = 0;
+  let fontSize = 0;
+  let fontSizeWeight = 0;
+  let originalLineCount = 0;
+  const geometries: SourceTextLineGeometry[] = [];
+  for (const member of ordered) {
+    const weight = weightOf(member);
+    prob += (member.prob ?? 0) * weight;
+    if (typeof member.fontSize === "number" && member.fontSize > 0) {
+      fontSize += member.fontSize * weight;
+      fontSizeWeight += weight;
+    }
+    originalLineCount += member.originalLineCount ?? 1;
+    if (member.sourceLineGeometries?.length) {
+      geometries.push(...member.sourceLineGeometries);
+    }
+  }
+  const dominant = ordered.reduce((best, m) => (
+    (m.box.width * m.box.height) > (best.box.width * best.box.height) ? m : best
+  ), ordered[0]);
+
+  return {
+    id: crypto.randomUUID(),
+    box,
+    quad,
+    direction: vertical ? "v" : "h",
+    prob,
+    fontSize: fontSizeWeight > 0 ? fontSize / fontSizeWeight : dominant.fontSize,
+    fgColor: dominant.fgColor,
+    bgColor: dominant.bgColor,
+    originalLineCount,
+    sourceText: ordered.map((m) => m.sourceText).join("\n"),
+    translatedText: "",
+    sourceLineGeometries: geometries.length > 0 ? geometries : undefined,
+  };
+}
+
+/**
+ * 竖直堆叠碎片的兜底合并。
+ *
+ * 检测器偶尔把一个气泡的首行单独切成一个窄框（例如「그나저나」），其余文字是另一个
+ * 更宽的多行块。上游行合并按“左右边缘对齐”判定同段，居中排版的短首行两边都对不上，
+ * 于是被拆成两个区域：各自独立翻译，排版时两组译文又叠回同一个气泡，读者看到的就是
+ * 重叠或重复的译文。
+ *
+ * 这里用保守的几何规则把这类碎片合回一段：横向投影基本重叠（同栏）、竖直间距不超过
+ * 较矮框的一半、宽度量级相近。同时满足三条的相邻文字在漫画里几乎不可能属于两个
+ * 独立气泡，而误合的最坏结果也只是把两句话当成一段翻译，仍能读。
+ */
+export function mergeStackedTextFragments(regions: TextRegion[]): TextRegion[] {
+  if (regions.length < 2) {
+    return regions;
+  }
+
+  const parent = regions.map((_, index) => index);
+  const find = (index: number): number => {
+    let root = index;
+    while (parent[root] !== root) {
+      root = parent[root];
+    }
+    while (parent[index] !== root) {
+      const next = parent[index];
+      parent[index] = root;
+      index = next;
+    }
+    return root;
+  };
+  for (let i = 0; i < regions.length; i += 1) {
+    for (let j = i + 1; j < regions.length; j += 1) {
+      if (find(i) === find(j)) continue;
+      if (shouldMergeStackedFragments(regions[i], regions[j])) {
+        parent[find(i)] = find(j);
+      }
+    }
+  }
+
+  const groups = new Map<number, TextRegion[]>();
+  const order: number[] = [];
+  for (let i = 0; i < regions.length; i += 1) {
+    const root = find(i);
+    const bucket = groups.get(root);
+    if (bucket) {
+      bucket.push(regions[i]);
+    } else {
+      groups.set(root, [regions[i]]);
+      order.push(root);
+    }
+  }
+
+  const result: TextRegion[] = [];
+  for (const root of order) {
+    const members = groups.get(root)!;
+    result.push(members.length === 1 ? members[0] : buildStackMergedRegion(members));
+  }
+  return result;
+}

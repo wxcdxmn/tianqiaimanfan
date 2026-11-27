@@ -324,6 +324,9 @@ export type OcrRunDebugInfo = {
     hangulShare: number;
     mediumMeanConfidence: number;
     koreanMeanConfidence: number;
+    /** 采样中被模型真正读出行数的数量，用于解释门控为何选择某个模型。 */
+    mediumAcceptedCount?: number;
+    koreanAcceptedCount?: number;
     chosen: 'paddleocr_v6_medium' | 'paddleocr_v5_korean';
   };
 };
