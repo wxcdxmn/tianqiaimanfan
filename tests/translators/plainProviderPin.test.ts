@@ -43,8 +43,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('指定引擎时只走该引擎', () => {
-  it('选中必应时完全不碰谷歌', async () => {
+describe('首选通道与降级', () => {
+  it('选中必应时先走必应，不先碰谷歌', async () => {
     const calls = mockFetch((url) => {
       if (url.includes('/translator')) return html(BING_PAGE);
       if (url.includes('ttranslatev3')) {
@@ -64,21 +64,22 @@ describe('指定引擎时只走该引擎', () => {
     expect(calls.some((url) => url.includes('ttranslatev3'))).toBe(true);
   });
 
-  it('选中谷歌时不会被限流推去必应，而是直接报限流', async () => {
+  it('选中谷歌被限流时自动降级到必应，不再直接报限流', async () => {
     const calls = mockFetch((url) => {
       if (url.includes('translate.googleapis.com')) return new Response('', { status: 429 });
       if (url.includes('/translator')) return html(BING_PAGE);
       if (url.includes('ttranslatev3')) {
-        return json([{ translations: [{ text: '不该出现的必应译文', to: 'zh-Hans' }] }]);
+        return json([{ translations: [{ text: '必应的译文', to: 'zh-Hans' }] }]);
       }
       throw new Error(`未预期的请求: ${url}`);
     });
 
     await expect(
       translatePlainText('hello world', 'en', 'zh-CN', undefined, 'google'),
-    ).rejects.toMatchObject({ code: 'plain_throttled' });
+    ).resolves.toBe('必应的译文');
 
-    expect(calls.some((url) => url.includes('ttranslatev3'))).toBe(false);
+    expect(calls.some((url) => url.includes('translate.googleapis.com'))).toBe(true);
+    expect(calls.some((url) => url.includes('ttranslatev3'))).toBe(true);
   }, 20000);
 
   it('未知通道直接报错', async () => {
@@ -110,12 +111,12 @@ describe('翻译服务设置映射到通道', () => {
         requestChatCompletion: async () => {
           throw new Error('不该走 LLM 通道');
         },
-        translatePlain: async (request: { text: string; provider?: string }) => {
-          seen.push(request.provider);
+        translatePlain: async (request: { text: string; preferredProvider?: string }) => {
+          seen.push(request.preferredProvider);
           return '译文';
         },
-        translatePlainBatch: async (request: { texts: readonly string[]; provider?: string }) => {
-          seen.push(request.provider);
+        translatePlainBatch: async (request: { texts: readonly string[]; preferredProvider?: string }) => {
+          seen.push(request.preferredProvider);
           return request.texts.map(() => '译文');
         },
       },

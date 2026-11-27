@@ -19,29 +19,35 @@ import {
 import { resolveSourceLanguage } from './detectLanguage';
 import { matchLocalPhrase } from './translators/localPhrases';
 
-/** 用户选中的引擎 → transport 的通道 id；选一次就只用这一个，不跨引擎降级。 */
-const PLAIN_PROVIDER_BY_TRANSLATOR: Record<Exclude<TextTranslatorKind, 'llm'>, PlainTranslationProvider> = {
-  google_web: 'google',
-  bing_web: 'bing',
-  mymemory_web: 'mymemory',
-  deeplx_web: 'deeplx',
+/**
+ * 用户选中的引擎 → 免费通道链：首选通道在首位，其余按固定顺序兜底。
+ *
+ * 选「谷歌翻译」表达的是「优先谷歌」；谷歌被限流（transport 内部降级）或对
+ * 专名原样回吐（下面的通道轮换兜底）时，依次换用必应 / MyMemory / DeepLX，
+ * 不再让整页失败或留下一堆原文，也不再牵扯 LLM。
+ */
+const PLAIN_PROVIDER_CHAIN_BY_TRANSLATOR: Record<Exclude<TextTranslatorKind, 'llm'>, readonly PlainTranslationProvider[]> = {
+  google_web: ['google', 'bing', 'mymemory', 'deeplx'],
+  bing_web: ['bing', 'google', 'mymemory', 'deeplx'],
+  mymemory_web: ['mymemory', 'google', 'bing', 'deeplx'],
+  deeplx_web: ['deeplx', 'google', 'bing', 'mymemory'],
 };
 
-const PLAIN_ENGINE_LABEL: Record<Exclude<TextTranslatorKind, 'llm'>, string> = {
-  google_web: '谷歌翻译',
-  bing_web: '必应翻译',
-  mymemory_web: 'MyMemory',
-  deeplx_web: 'DeepLX',
+const PLAIN_PROVIDER_LABEL: Record<PlainTranslationProvider, string> = {
+  google: '谷歌翻译',
+  bing: '必应翻译',
+  mymemory: 'MyMemory',
+  deeplx: 'DeepLX',
 };
 
-function plainProviderFor(translator: TextTranslatorKind | undefined): PlainTranslationProvider | undefined {
-  return translator && translator !== 'llm' ? PLAIN_PROVIDER_BY_TRANSLATOR[translator] : undefined;
+function plainProviderChainFor(translator: TextTranslatorKind | undefined): readonly PlainTranslationProvider[] {
+  return translator && translator !== 'llm'
+    ? PLAIN_PROVIDER_CHAIN_BY_TRANSLATOR[translator]
+    : PLAIN_PROVIDER_CHAIN_BY_TRANSLATOR.google_web;
 }
 
 function plainEngineLabel(translator: TextTranslatorKind | undefined): string {
-  return translator && translator !== 'llm'
-    ? `免费通道（${PLAIN_ENGINE_LABEL[translator]}）`
-    : '免费通道';
+  return `免费通道（${PLAIN_PROVIDER_LABEL[plainProviderChainFor(translator)[0]]}）`;
 }
 
 type LlmRegionRequest = {
@@ -200,11 +206,6 @@ function toBatchLine(text: string): string {
   return text.replace(/[ \t]*[\r\n]+[ \t]*/g, ' ').trim();
 }
 
-/**
- * 免费通道失败后的 LLM 自动补救：整页失败区域一次合并请求带上下文补翻。
- * 用户在设置里配置过 LLM API Key 时生效；未配置（请求被 transport 拒绝）
- * 则安静放弃，保持原有免费通道行为。
- */
 function emitTranslateDiagnostic(
   config: TextTranslationConfig,
   options: RunTranslateOptions,
@@ -229,150 +230,53 @@ function emitTranslateDiagnostic(
   }
 }
 
-async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
+/**
+ * 免费通道兜底：对仍然失败的区域，按通道链逐个 provider 单独重试。
+ *
+ * translatePlainTexts 内部的降级只在「请求失败」时触发；谷歌对
+ * 「¿R-RYU ZION...?」这类专名会「请求成功但原样回吐」，transport 感知不到。
+ * 这里显式轮换首选通道（谷歌 → 必应 → MyMemory → DeepLX）再试，
+ * 任何一个通道给出真译文就收下；全链都不行则保留原文。
+ */
+async function recoverFailedRegionsWithFreeChain<T extends TextTranslationRegion>(
   next: T[],
   config: TextTranslationConfig,
   options: RunTranslateOptions,
+  chain: readonly PlainTranslationProvider[],
 ): Promise<number> {
-  let failed = next.filter((region) => region.translationFailed && region.sourceText.trim());
-  if (failed.length === 0) {
-    return 0;
-  }
-  // 拟声词/OCR 噪声不必发 LLM：拟声词本地落地，噪声保留原文不擦除，
-  // 剩下的才需要真正的翻译（也省掉无谓的「未配置 API Key」报错）。
-  let localRecovered = 0;
-  const needLlm: typeof failed = [];
-  for (const region of failed) {
-    const match = matchLocalPhrase(region.sourceText);
-    if (match?.kind === 'untranslatable') {
-      continue;
-    }
-    if (match?.kind === 'translate') {
-      const { translationFailed: _failed, ...rest } = region;
-      delete (region as { translationFailed?: boolean }).translationFailed;
-      Object.assign(region, rest, { translatedText: match.text });
-      localRecovered += 1;
-      continue;
-    }
-    needLlm.push(region);
-  }
-  failed = needLlm;
-  if (failed.length === 0) {
-    return localRecovered;
-  }
-  if (config.llmProvider === 'gemini') {
-    return localRecovered;
-  }
-  try {
-    const result = await llmTranslateRegions({
-      provider: config.llmProvider,
-      authMode: config.llmAuthMode,
-      baseUrl: config.llmBaseUrl,
-      model: config.llmModel,
-      useCustomModel: config.llmUseCustomModel === true,
-      from: config.sourceLang,
-      to: config.targetLang,
-      regions: failed.map(buildLlmRegionRequest),
-      translationContext: config.translationContext,
-      diagnosticRunId: config.diagnosticRunId,
-      observer: options.observer,
-      signal: options.signal,
-      transport: options.transport,
-    });
-    let recoveredCount = 0;
-    for (const region of failed) {
-      const translated = result.byId.get(region.id);
-      if (!translated?.translatedText) {
+  let failedCount = 0;
+  let recoveredCount = 0;
+  for (let index = 0; index < next.length; index += 1) {
+    const region = next[index];
+    if (!region.translationFailed || !region.sourceText.trim()) continue;
+    failedCount += 1;
+    for (const provider of chain) {
+      let translatedText = '';
+      try {
+        await delay(GOOGLE_REQUEST_GAP_MS, options.signal);
+        translatedText = await translateOne(region.sourceText, config, options, provider);
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        continue;
+      }
+      if (!translatedText || looksUntranslated(region.sourceText, translatedText, config.targetLang)) {
         continue;
       }
       const { translationFailed: _failed, ...rest } = region;
-      delete (region as { translationFailed?: boolean }).translationFailed;
-      Object.assign(region, rest, { translatedText: translated.translatedText });
+      next[index] = { ...rest, translatedText } as T;
       recoveredCount += 1;
+      break;
     }
-    if (recoveredCount > 0) {
-      console.info(
-        `[translate] 免费通道失败 ${failed.length} 条，已用 LLM 通道补翻成功 ${recoveredCount} 条`,
-      );
-      emitTranslateDiagnostic(config, options, 'info', '免费通道失败，已用 LLM 补翻', {
-        failedCount: failed.length,
-        recoveredCount,
-        provider: config.llmProvider,
-        model: config.llmModel,
-      });
-    }
-    return recoveredCount + localRecovered;
-  } catch (error) {
-    if (options.signal?.aborted) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    console.debug(
-      '[translate] LLM 补翻不可用（未配置 API Key 或请求失败），保留免费通道结果:',
-      message,
-    );
-    // 这条以前只打到 console，导出日志里看不到：只要 LLM 这条兜底路径坏了，
-    // 用户看到的就是「一大半对白没翻译」，而日志里一片安静。
-    emitTranslateDiagnostic(config, options, 'warn', 'LLM 补翻不可用，这些对白会保留原文', {
-      failedCount: failed.length,
-      provider: config.llmProvider,
-      authMode: config.llmAuthMode,
-      baseUrl: config.llmBaseUrl,
-      model: config.llmModel,
-      reason: message,
-    }, error);
-    return localRecovered;
   }
-}
-
-/**
- * 本章免费通道已确定耗尽：后续图片直接整页走 LLM，不再逐条撞 429。
- * 进程内状态，10 分钟后自动失效，避免长期绕过免费通道。
- */
-let preferLlmAfterThrottle = false;
-let preferLlmUntil = 0;
-const PREFER_LLM_TTL_MS = 10 * 60_000;
-
-function switchToLlmChannel(): void {
-  preferLlmAfterThrottle = true;
-  preferLlmUntil = Date.now() + PREFER_LLM_TTL_MS;
-}
-
-function shouldPreferLlmChannel(): boolean {
-  return preferLlmAfterThrottle && Date.now() < preferLlmUntil;
-}
-
-/** 仅用于测试：清空「本章改走 LLM」的记忆。 */
-export function resetTranslateChannelMemory(): void {
-  preferLlmAfterThrottle = false;
-  preferLlmUntil = 0;
-}
-
-/** 整页（所有还没有译文的条目）交给 LLM 一次带上下文翻译。 */
-async function recoverWholePageWithLlm<T extends TextTranslationRegion>(
-  next: T[],
-  config: TextTranslationConfig,
-  options: RunTranslateOptions,
-): Promise<number> {
-  // 在副本上操作：LLM 补翻失败时不能把 translationFailed 留在真实区域上，
-  // 否则退回免费通道翻译成功的框也会因为标记残留而被排版阶段跳过。
-  const snapshot = next.map((region) => ({ ...region }) as T);
-  let targets = 0;
-  for (const region of snapshot) {
-    if (!region.sourceText.trim() || region.translatedText) continue;
-    region.translationFailed = true;
-    targets += 1;
+  if (recoveredCount > 0) {
+    console.info(`[translate] 已用备用免费通道补翻成功 ${recoveredCount}/${failedCount} 条`);
+    emitTranslateDiagnostic(config, options, 'info', '已用备用免费通道补翻失败条目', {
+      recoveredCount,
+      failedCount,
+      targetLang: config.targetLang,
+    });
   }
-  if (targets === 0) return 0;
-  const recovered = await llmRecoverFailedRegions(snapshot, config, options);
-  if (recovered === 0) return 0;
-  for (let index = 0; index < next.length; index += 1) {
-    const translated = snapshot[index].translatedText;
-    if (!translated) continue;
-    const { translationFailed: _failed, ...rest } = next[index] as T & { translationFailed?: boolean };
-    next[index] = { ...rest, translatedText: translated } as T;
-  }
-  return recovered;
+  return recoveredCount;
 }
 
 function planPlainBatchGroups<T extends TextTranslationRegion>(
@@ -403,13 +307,15 @@ function planPlainBatchGroups<T extends TextTranslationRegion>(
 
 /**
  * 免费接口通道：先合并翻译（大幅降低请求数），再对漏网条目逐条补，
- * 最后整页补一轮。单条失败不拖垮整页。
+ * 整页失败喘息一轮，最后按通道链轮换兜底。单条失败不拖垮整页。
+ * LLM 只在用户显式选择 LLM 引擎时才走（见 runTranslate），这里绝不触碰。
  */
 async function translateRegionsWithPlainTransport<T extends TextTranslationRegion>(
   regions: readonly T[],
   config: TextTranslationConfig,
   options: RunTranslateOptions,
 ): Promise<TextTranslationResult<T>> {
+  const chain = plainProviderChainFor(config.translator);
   const next: T[] = regions.map((region) => ({ ...region, translatedText: '' }) as T);
   const pending: number[] = [];
   next.forEach((region, index) => {
@@ -417,14 +323,6 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       pending.push(index);
     }
   });
-
-  // 一整章漫画会连续送来十几张图，每张都要发十几条请求；免费通道按出口 IP 共享额度，
-  // 一旦这一章踩到限流，后面的图会继续按「先逐条撞 429、再补翻」的流程走一遍，
-  // 结果是整章一大半对白拿不到译文。这里记住「本章免费通道已耗尽」，
-  // 后续图片直接走 LLM，不再让每张图重新撞一轮。
-  if (shouldPreferLlmChannel() && await recoverWholePageWithLlm(next, config, options) > 0) {
-    return { regions: next, translationDebug: null };
-  }
 
   let lastRequestAt = 0;
   const throttle = async (gap: number): Promise<void> => {
@@ -436,7 +334,6 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
   };
 
   const batch = options.transport?.translatePlainBatch;
-  const provider = plainProviderFor(config.translator);
   if (batch && pending.length > 1) {
     for (const group of planPlainBatchGroups(regions, pending)) {
       await throttle(PLAIN_BATCH_GAP_MS);
@@ -445,7 +342,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
           texts: group.map((index) => toBatchLine(regions[index].sourceText)),
           from: config.sourceLang,
           to: config.targetLang,
-          provider,
+          preferredProvider: chain[0],
           signal: options.signal,
         });
         if (output.length !== group.length) {
@@ -540,16 +437,10 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
   }
 
   if (attemptedCount > 0 && failedCount === attemptedCount) {
-    // 通道全被限流时，补翻只会再等一轮冷却，直接报错让用户稍后重试/换通道。
+    // 整页都失败。全通道限流时补翻只会再等冷却，直接报错让用户稍后重试。
     if (throttleExhausted) {
-      // 已配置 LLM 通道时，用 LLM 整页补翻失败区域，不再直接报错。
-      if (await llmRecoverFailedRegions(next, config, options) > 0) {
-        switchToLlmChannel();
-        return { regions: next, translationDebug: null };
-      }
       throw new Error(
-        `文本翻译全部失败（${failedCount} 条）：${plainEngineLabel(config.translator)}被限流或不可达，`
-        + '稍后重试，或在设置里改用 LLM 通道',
+        `文本翻译全部失败（${failedCount} 条）：所有免费翻译通道被限流或不可达，稍后重试`,
       );
     }
     // 整页都失败通常是被限流或断网，先给一次整体喘息，再把整页重试一轮。
@@ -574,24 +465,20 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       const { translationFailed: _failed, ...rest } = region;
       next[index] = { ...rest, translatedText } as T;
     }
-    if (recoveredCount > 0) {
-      return { regions: next, translationDebug: null };
+    failedCount -= recoveredCount;
+    if (failedCount > 0) {
+      failedCount -= await recoverFailedRegionsWithFreeChain(next, config, options, chain);
     }
-    if (await llmRecoverFailedRegions(next, config, options) > 0) {
-      return { regions: next, translationDebug: null };
+    if (failedCount >= attemptedCount) {
+      throw new Error(
+        `文本翻译全部失败（${failedCount} 条）：${plainEngineLabel(config.translator)}等免费通道被限流或不可达，稍后重试`,
+      );
     }
-    throw new Error(
-      `文本翻译全部失败（${failedCount} 条）：${plainEngineLabel(config.translator)}被限流或不可达，`
-      + '稍后重试，或在设置里改用 LLM 通道',
-    );
+    return { regions: next, translationDebug: null };
   }
   if (failedCount > 0) {
     if (throttleExhausted) {
-      // 已配置 LLM 通道时，用 LLM 整页补翻失败区域。
-      if (await llmRecoverFailedRegions(next, config, options) > 0) {
-        switchToLlmChannel();
-        return { regions: next, translationDebug: null };
-      }
+      // 全部免费通道都被限流：不再空转，失败的气泡保留原文。
       console.warn(`[translate] ${failedCount}/${attemptedCount} 条翻译失败（通道限流），这些气泡保留原文`);
       return { regions: next, translationDebug: null };
     }
@@ -617,16 +504,16 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       failedCount -= recoveredCount;
     }
     if (failedCount > 0) {
-      // 补翻一轮后仍有失败：已配置 LLM 通道时用 LLM 整页补翻。
-      if (await llmRecoverFailedRegions(next, config, options) > 0) {
-        return { regions: next, translationDebug: null };
-      }
+      // 补翻一轮后仍有失败：按通道链轮换（专名回吐大多在这里被必应/MyMemory 翻掉）。
+      failedCount -= await recoverFailedRegionsWithFreeChain(next, config, options, chain);
+    }
+    if (failedCount > 0) {
       console.warn(`[translate] ${failedCount}/${attemptedCount} 条翻译失败，这些气泡保留原文`);
     }
   }
 
   if (untranslatedCount > 0) {
-    emitTranslateDiagnostic(config, options, 'warn', '免费通道原样回吐未翻译的条目，已交给补翻兜底', {
+    emitTranslateDiagnostic(config, options, 'warn', '免费通道原样回吐未翻译的条目，已交给备用通道兜底', {
       untranslatedCount,
       attemptedCount,
       failedCount,
@@ -641,6 +528,7 @@ async function translateOne(
   text: string,
   config: TextTranslationConfig,
   options: RunTranslateOptions,
+  preferredProvider?: PlainTranslationProvider,
 ): Promise<string> {
   if (!text.trim()) {
     return '';
@@ -654,7 +542,7 @@ async function translateOne(
       text,
       from: config.sourceLang,
       to: config.targetLang,
-      provider: plainProviderFor(config.translator),
+      preferredProvider: preferredProvider ?? plainProviderChainFor(config.translator)[0],
       signal: options.signal,
     });
   }

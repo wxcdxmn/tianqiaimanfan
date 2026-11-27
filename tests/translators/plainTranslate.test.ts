@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTextTranslator } from '../../packages/text-translation/src/translator';
 import type { TextTranslationConfig } from '../../packages/text-translation/src/contracts';
 
-type PlainRequest = { text: string; from: string; to: string };
+type PlainRequest = { text: string; from: string; to: string; preferredProvider?: string };
 
 function createConfig(overrides: Partial<TextTranslationConfig> = {}): TextTranslationConfig {
   return {
@@ -25,7 +25,7 @@ function createTransport(handler: (request: PlainRequest) => Promise<string>) {
       requestChatCompletion: async () => {
         throw new Error('不该走 LLM 通道');
       },
-      translatePlain: async (request: PlainRequest) => {
+      translatePlain: async (request: PlainRequest & { preferredProvider?: string }) => {
         calls.push({ text: request.text, from: request.from, to: request.to });
         return handler(request);
       },
@@ -128,43 +128,29 @@ describe('免费翻译通道的健壮性', () => {
     ).rejects.toThrow(/翻译全部失败/);
   });
 
-  it('免费通道限流耗尽时，自动改用已配置的 LLM 通道补翻', async () => {
+  it('免费通道全部限流时不再调用 LLM，整页报错', async () => {
     const llmRequests: unknown[] = [];
     const { transport } = createTransport(async () => {
-      throw new Error('Google 翻译请求失败: 429');
+      const error = new Error('免费翻译通道全部失败: Google: 429') as Error & { code?: string };
+      error.code = 'plain_throttled';
+      throw error;
     });
     transport.requestChatCompletion = async (request) => {
       llmRequests.push(request);
-      const userContent = (request.body.messages as Array<{ role: string; content: string }>)
-        .find((message) => message.role === 'user')!.content;
-      // 回显输入 id，模拟结构化翻译响应。
-      const payload = JSON.parse(userContent.match(/输入数据：(.+)$/u)?.[1] ?? '{}') as Array<{ id: string }>;
-      return {
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              regions: payload.map((item) => ({ id: item.id, translation: `LLM:${item.id}` })),
-            }),
-          },
-        }],
-      };
+      throw new Error('不该走 LLM 通道');
     };
     const translator = createTextTranslator({ transport });
 
-    const result = await translator.translateRegions({
-      regions: regionsOf('First english line.', 'Second english line.'),
-      config: createConfig(),
-    });
-
-    expect(llmRequests).toHaveLength(1);
-    expect(result.regions.map((region) => region.translatedText)).toEqual([
-      'LLM:r0',
-      'LLM:r1',
-    ]);
-    expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
+    await expect(
+      translator.translateRegions({
+        regions: regionsOf('First english line.', 'Second english line.'),
+        config: createConfig(),
+      }),
+    ).rejects.toThrow(/翻译全部失败/);
+    expect(llmRequests).toHaveLength(0);
   });
 
-  it('未配置 LLM（transport 拒绝）时保持原行为：限流耗尽抛错', async () => {
+  it('未配置 LLM（transport 拒绝）不影响免费通道行为：限流耗尽抛错', async () => {
     const { transport } = createTransport(async () => {
       throw new Error('Google 翻译请求失败: 429');
     });
@@ -181,26 +167,18 @@ describe('免费翻译通道的健壮性', () => {
     ).rejects.toThrow(/翻译全部失败/);
   });
 
-  it('部分免费失败时，用 LLM 补翻失败条目', async () => {
+  it('部分免费失败时，失败条目按通道链轮换兜底（不调用 LLM）', async () => {
+    const llmRequests: unknown[] = [];
     const { transport } = createTransport(async (request) => {
-      if (request.text.includes('BROKEN')) {
-        throw new Error('Google 翻译请求失败: 429');
+      // 谷歌（首选通道）对 BROKEN 文本报 400；其他通道都能翻。
+      if (request.preferredProvider === 'google' && request.text.includes('BROKEN')) {
+        throw new Error('Google 翻译请求失败: 400');
       }
-      return `译:${request.text}`;
+      return `译(${request.preferredProvider}):${request.text}`;
     });
     transport.requestChatCompletion = async (request) => {
-      const userContent = (request.body.messages as Array<{ role: string; content: string }>)
-        .find((message) => message.role === 'user')!.content;
-      const payload = JSON.parse(userContent.match(/输入数据：(.+)$/u)?.[1] ?? '{}') as Array<{ id: string }>;
-      return {
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              regions: payload.map((item) => ({ id: item.id, translation: `LLM:${item.id}` })),
-            }),
-          },
-        }],
-      };
+      llmRequests.push(request);
+      throw new Error('不该走 LLM 通道');
     };
     const translator = createTextTranslator({ transport });
 
@@ -209,9 +187,38 @@ describe('免费翻译通道的健壮性', () => {
       config: createConfig(),
     });
 
-    expect(result.regions[0].translatedText).toBe('LLM:r0');
-    expect(result.regions[1].translatedText).toBe('译:Good english line.');
+    expect(result.regions[0].translatedText).toBe('译(bing):A BROKEN english line.');
+    expect(result.regions[1].translatedText).toBe('译(google):Good english line.');
     expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
+    expect(llmRequests).toHaveLength(0);
+  });
+
+  it('谷歌原样回吐专名时，轮换到必应翻出真译文（不调用 LLM）', async () => {
+    const llmRequests: unknown[] = [];
+    const { transport } = createTransport(async (request) => {
+      // 谷歌对专名整行原样回吐；必应能给出真译文。
+      if (request.preferredProvider === 'google') {
+        return request.text;
+      }
+      return `译(${request.preferredProvider}):${request.text}`;
+    });
+    transport.requestChatCompletion = async (request) => {
+      llmRequests.push(request);
+      throw new Error('不该走 LLM 通道');
+    };
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('¿R-RYU ZION...?', 'WHY DID YOU COME HERE?'),
+      config: createConfig(),
+    });
+
+    expect(result.regions.map((region) => region.translatedText)).toEqual([
+      '译(bing):¿R-RYU ZION...?',
+      '译(bing):WHY DID YOU COME HERE?',
+    ]);
+    expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
+    expect(llmRequests).toHaveLength(0);
   });
 
   it('空文本区域不会发起请求', async () => {

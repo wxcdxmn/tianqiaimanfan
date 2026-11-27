@@ -13,12 +13,13 @@ export type PlainTranslateOptions = {
   maxChars?: number;
   signal?: AbortSignal;
   /**
-   * 指定通道时只走这一条通道，失败就直接报错，不跨通道降级。
+   * 首选通道：本次请求先试它，被限流/失败时按健康度自动降级到其余免费通道。
    *
-   * 用户在设置里选了「谷歌翻译」就是要谷歌：谷歌挂了应该让他看到失败，
-   * 而不是悄悄换成 Bing 的译文（语气和断句都不一样，整章风格会跳）。
+   * 用户在设置里选「谷歌翻译」表达的是「优先谷歌」；谷歌限流时静默降级到
+   * Bing/MyMemory/DeepLX，比整页失败或留下一堆原文更符合预期。不同通道的
+   * 语气差异由「首选通道承载绝大多数请求」来控制——降级只发生在少数请求上。
    */
-  provider?: PlainTranslateProviderId;
+  preferredProvider?: PlainTranslateProviderId;
 };
 
 type Provider = {
@@ -186,8 +187,9 @@ function rankProviders(): Provider[] {
 /**
  * 逐条/合并翻译的统一入口。
  *
- * 默认按健康度轮换 Google → Bing → MyMemory（限流时自动降级）；一旦
- * options.provider 指定了通道，就只走那一条，绝不换用别的引擎。
+ * 按「首选通道优先、其余按健康度」排序尝试：首选被限流/失败时自动降级到
+ * 其余免费通道（冷却中的通道排后面，避免每次请求都先撞一次 429）；全部
+ * 通道都不可用时抛错，由上层决定整页失败还是保留原文。
  */
 export async function translatePlainTexts(
   texts: readonly string[],
@@ -201,19 +203,20 @@ export async function translatePlainTexts(
     return texts.map(() => '');
   }
 
-  const pinned = options.provider
-    ? PROVIDERS.filter((provider) => provider.id === options.provider)
-    : null;
-  if (pinned && pinned.length === 0) {
-    throw new Error(`未知的翻译通道: ${String(options.provider)}`);
+  const preferred = options.preferredProvider
+    ? PROVIDERS.find((provider) => provider.id === options.preferredProvider)
+    : undefined;
+  if (options.preferredProvider && !preferred) {
+    throw new Error(`未知的翻译通道: ${String(options.preferredProvider)}`);
   }
+  const rest = rankProviders().filter((provider) => provider.id !== preferred?.id);
+  const order = preferred ? [preferred, ...rest] : rankProviders();
 
   const errors: string[] = [];
   let hardWaited = false;
   let sawThrottle = false;
 
   for (;;) {
-    const order = pinned ?? rankProviders();
     for (const provider of order) {
       if (options.signal?.aborted) {
         throw new DOMException('已取消', 'AbortError');
@@ -225,27 +228,15 @@ export async function translatePlainTexts(
         continue;
       }
       if (remaining > 0) {
-        if (pinned) {
-          // 指定引擎时最多等一次冷却：等完还失败就交给上层（限流标记 / LLM 兜底 ），
-          // 不能像多通道那样一轮轮等下去，否则整页会卡在指数退避里。
-          if (hardWaited) {
-            sawThrottle = true;
-            errors.push(`${provider.label} 限流冷却中（约 ${Math.ceil(remaining / 1000)}s）`);
-            continue;
-          }
-          hardWaited = true;
-          await delay(remaining, options.signal);
-        } else {
-          const hasHealthy = order.some(
-            (other) => other.id !== provider.id && cooldownRemaining(other.id) === 0,
-          );
-          if (hasHealthy) {
-            sawThrottle = true;
-            errors.push(`${provider.label} 限流冷却中`);
-            continue;
-          }
-          await delay(remaining, options.signal);
+        const hasHealthy = order.some(
+          (other) => other.id !== provider.id && cooldownRemaining(other.id) === 0,
+        );
+        if (hasHealthy) {
+          sawThrottle = true;
+          errors.push(`${provider.label} 限流冷却中`);
+          continue;
         }
+        await delay(remaining, options.signal);
       }
       try {
         const output = await provider.translate(texts, options);
@@ -275,11 +266,7 @@ export async function translatePlainTexts(
       continue;
     }
     const detail = errors.slice(-4).join('；') || '未知错误';
-    const error = new Error(
-      pinned
-        ? `${pinned[0]?.label ?? '所选引擎'} 翻译失败: ${detail}`
-        : `免费翻译通道全部失败: ${detail}`,
-    ) as Error & { code?: string };
+    const error = new Error(`免费翻译通道全部失败: ${detail}`) as Error & { code?: string };
     if (sawThrottle) {
       // 告诉上层「这是限流，不是内容问题」，别再逐条空转重试。
       error.code = 'plain_throttled';
@@ -293,9 +280,9 @@ export function translatePlainText(
   from: string,
   to: string,
   signal?: AbortSignal,
-  provider?: PlainTranslateProviderId,
+  preferredProvider?: PlainTranslateProviderId,
 ): Promise<string> {
-  return translatePlainTexts([text], { from, to, signal, provider }).then((output) => output[0] ?? '');
+  return translatePlainTexts([text], { from, to, signal, preferredProvider }).then((output) => output[0] ?? '');
 }
 
 export function translatePlainBatch(
@@ -303,9 +290,9 @@ export function translatePlainBatch(
   from: string,
   to: string,
   signal?: AbortSignal,
-  provider?: PlainTranslateProviderId,
+  preferredProvider?: PlainTranslateProviderId,
 ): Promise<string[]> {
-  return translatePlainTexts(texts, { from, to, signal, provider });
+  return translatePlainTexts(texts, { from, to, signal, preferredProvider });
 }
 
 export type PlainTranslateDiagnostics = {

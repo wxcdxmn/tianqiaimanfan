@@ -70,7 +70,7 @@ export function createTextTranslationTransport(
         request.from,
         request.to,
         request.signal,
-        request.provider,
+        request.preferredProvider,
       );
     },
     translatePlainBatch(request) {
@@ -79,7 +79,7 @@ export function createTextTranslationTransport(
         request.from,
         request.to,
         request.signal,
-        request.provider,
+        request.preferredProvider,
       );
     },
   };
@@ -164,7 +164,7 @@ export function createDirectTextTranslationTransport(
         request.from,
         request.to,
         request.signal,
-        request.provider,
+        request.preferredProvider,
       );
     },
     translatePlainBatch(request) {
@@ -173,7 +173,7 @@ export function createDirectTextTranslationTransport(
         request.from,
         request.to,
         request.signal,
-        request.provider,
+        request.preferredProvider,
       );
     },
   };

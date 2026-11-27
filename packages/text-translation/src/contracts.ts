@@ -82,7 +82,8 @@ export type PlainTranslationTransportRequest = {
   text: string;
   from: string;
   to: string;
-  provider?: PlainTranslationProvider;
+  /** 首选免费通道：先试它，限流/失败时 transport 内部按健康度降级到其余通道。 */
+  preferredProvider?: PlainTranslationProvider;
   signal?: AbortSignal;
 };
 
@@ -90,7 +91,8 @@ export type PlainTranslationBatchRequest = {
   texts: readonly string[];
   from: string;
   to: string;
-  provider?: PlainTranslationProvider;
+  /** 首选免费通道，语义同上。 */
+  preferredProvider?: PlainTranslationProvider;
   signal?: AbortSignal;
 };
 
