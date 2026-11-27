@@ -23,6 +23,13 @@ const PADDLE_DET_MAX_RECALL_BOXES = 60;
 /** 与新框重叠达到该比例的旧框视为「已覆盖」，不再重复添加。 */
 const PADDLE_DET_COVERED_RATIO = 0.35;
 
+/**
+ * 中灰像素（亮度 48–208）占比达到该值，就认为画面铺了网点或大面积灰调，
+ * 值得补跑一轮去网点后的检测。
+ */
+export const PADDLE_DET_DEHALFTONE_MIDTONE_SHARE = 0.28;
+
+
 const IMAGENET_MEAN = [0.485, 0.456, 0.406] as const;
 const IMAGENET_STD = [0.229, 0.224, 0.225] as const;
 
@@ -47,6 +54,10 @@ export type PaddleDetRecallResult = {
   rawBoxCount: number;
   rejectedByScore: number;
   durationMs: number;
+  /** 是否追加了去网点的第二轮检测。 */
+  dehalftonePassApplied: boolean;
+  /** 中灰像素占比，用于判断画面是否为网点/灰调。 */
+  midtoneShare: number;
 };
 
 /** 按官方 DetResizeForTest 的规则算目标尺寸：等比缩到 maxSide，宽高对齐到 32。 */
@@ -90,6 +101,146 @@ export function buildPaddleDetInput(
   return input;
 }
 
+function luminanceHistogram(
+  rgba: Uint8ClampedArray | Uint8Array,
+  width: number,
+  height: number,
+): Uint32Array {
+  const histogram = new Uint32Array(256);
+  const total = Math.min(width * height, Math.floor(rgba.length / 4));
+  for (let i = 0; i < total; i += 1) {
+    const offset = i * 4;
+    const luma = (rgba[offset] * 299 + rgba[offset + 1] * 587 + rgba[offset + 2] * 114) / 1000;
+    histogram[Math.min(255, Math.max(0, Math.round(luma)))] += 1;
+  }
+  return histogram;
+}
+
+/**
+ * 中灰像素占比。纯黑底白字的页接近 0，铺满网点或灰阶渐变的页会明显偏高，
+ * 用来决定要不要追加去网点那一轮检测。
+ */
+export function computeMidtoneShare(
+  rgba: Uint8ClampedArray | Uint8Array,
+  width: number,
+  height: number,
+): number {
+  const histogram = luminanceHistogram(rgba, width, height);
+  let total = 0;
+  let midtone = 0;
+  for (let value = 0; value < 256; value += 1) {
+    total += histogram[value];
+    if (value >= 48 && value <= 208) {
+      midtone += histogram[value];
+    }
+  }
+  return total > 0 ? midtone / total : 0;
+}
+
+/** 去网点模糊的半径（3 次盒式近似高斯，等效 σ≈2）。 */
+export const PADDLE_DET_DEHALFTONE_RADIUS = 2;
+
+function boxBlurHorizontal(
+  src: Uint8ClampedArray,
+  dst: Uint8ClampedArray,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const window = radius * 2 + 1;
+  const lastX = width - 1;
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width * 4;
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const source = row + Math.min(lastX, Math.max(0, offset)) * 4;
+      sumR += src[source];
+      sumG += src[source + 1];
+      sumB += src[source + 2];
+    }
+    for (let x = 0; x < width; x += 1) {
+      const target = row + x * 4;
+      dst[target] = sumR / window;
+      dst[target + 1] = sumG / window;
+      dst[target + 2] = sumB / window;
+      dst[target + 3] = src[target + 3];
+      const add = row + Math.min(lastX, x + radius + 1) * 4;
+      const remove = row + Math.max(0, x - radius) * 4;
+      sumR += src[add] - src[remove];
+      sumG += src[add + 1] - src[remove + 1];
+      sumB += src[add + 2] - src[remove + 2];
+    }
+  }
+}
+
+function boxBlurVertical(
+  src: Uint8ClampedArray,
+  dst: Uint8ClampedArray,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const window = radius * 2 + 1;
+  const lastY = height - 1;
+  const stride = width * 4;
+  for (let x = 0; x < width; x += 1) {
+    const column = x * 4;
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const source = Math.min(lastY, Math.max(0, offset)) * stride + column;
+      sumR += src[source];
+      sumG += src[source + 1];
+      sumB += src[source + 2];
+    }
+    for (let y = 0; y < height; y += 1) {
+      const target = y * stride + column;
+      dst[target] = sumR / window;
+      dst[target + 1] = sumG / window;
+      dst[target + 2] = sumB / window;
+      dst[target + 3] = src[target + 3];
+      const add = Math.min(lastY, y + radius + 1) * stride + column;
+      const remove = Math.max(0, y - radius) * stride + column;
+      sumR += src[add] - src[remove];
+      sumG += src[add + 1] - src[remove + 1];
+      sumB += src[add + 2] - src[remove + 2];
+    }
+  }
+}
+
+/**
+ * 轻度模糊去网点，供第二轮检测使用。
+ *
+ * 网点的点阵频率远高于笔画，DB 检测器会把整片网点当成高频纹理，连带压掉压在
+ * 网点上的字的响应：实测同一张「网点上的灰字」在原图上峰值只有 0.13–0.14，
+ * 低于 0.2 的二值化门限直接被抹掉；轻度模糊之后能正常框出（2/2 全部找回）。
+ * 代价是 13px 级小字会被糊掉一部分，所以这一轮只与主检测取并集，不替代它。
+ *
+ * 试过的其它路子都不行：反色对灰字无效、锐化会把响应压到 0、单纯降阈值只会
+ * 把网点噪点当文字刷出来。
+ */
+export function blurRgbaForDetection(
+  rgba: Uint8ClampedArray | Uint8Array,
+  width: number,
+  height: number,
+  radius: number = PADDLE_DET_DEHALFTONE_RADIUS,
+): Uint8ClampedArray {
+  const current = new Uint8ClampedArray(rgba);
+  const result = new Uint8ClampedArray(rgba.length);
+  const effectiveRadius = Math.max(0, Math.floor(radius));
+  if (effectiveRadius === 0 || width < 1 || height < 1) {
+    return current;
+  }
+  for (let pass = 0; pass < 3; pass += 1) {
+    boxBlurHorizontal(current, result, width, height, effectiveRadius);
+    boxBlurVertical(result, current, width, height, effectiveRadius);
+  }
+  return current;
+}
+
 function clampRect(rect: Rect, width: number, height: number): Rect | null {
   const x0 = Math.max(0, Math.floor(rect.x));
   const y0 = Math.max(0, Math.floor(rect.y));
@@ -111,6 +262,40 @@ export function unclipDetRect(rect: Rect, ratio: number = PADDLE_DET_UNCLIP_RATI
     width: rect.width + 2 * distance,
     height: rect.height + 2 * distance,
   };
+}
+
+function intersectionOverUnion(a: Rect, b: Rect): number {
+  const x0 = Math.max(a.x, b.x);
+  const y0 = Math.max(a.y, b.y);
+  const x1 = Math.min(a.x + a.width, b.x + b.width);
+  const y1 = Math.min(a.y + a.height, b.y + b.height);
+  if (x1 <= x0 || y1 <= y0) {
+    return 0;
+  }
+  const overlap = (x1 - x0) * (y1 - y0);
+  const union = a.width * a.height + b.width * b.height - overlap;
+  return union > 0 ? overlap / union : 0;
+}
+
+function containsPoint(rect: Rect, x: number, y: number): boolean {
+  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+}
+
+/** 两轮检测的框取并集：位置基本重合（IoU≥0.3 或中心已落在已有框内）的只留一个。 */
+export function mergeDetBoxes(base: PaddleDetBox[], extra: PaddleDetBox[]): PaddleDetBox[] {
+  const merged = [...base];
+  for (const candidate of extra) {
+    const centerX = candidate.box.x + candidate.box.width / 2;
+    const centerY = candidate.box.y + candidate.box.height / 2;
+    const duplicated = merged.some((existing) => (
+      intersectionOverUnion(existing.box, candidate.box) >= 0.3
+      || containsPoint(existing.box, centerX, centerY)
+    ));
+    if (!duplicated) {
+      merged.push(candidate);
+    }
+  }
+  return merged;
 }
 
 function meanProbability(
@@ -308,28 +493,56 @@ export async function detectWithPaddleDetRecall(
     throw new Error('PaddleOCR 检测召回：无法读取画布像素');
   }
   const rgba = ctx.getImageData(0, 0, geometry.inputWidth, geometry.inputHeight).data;
-  const inputData = buildPaddleDetInput(rgba, geometry.inputWidth, geometry.inputHeight);
   const inputName = session.inputNames[0];
   if (!inputName) {
     throw new Error('PaddleOCR 检测召回：模型缺少输入名称');
   }
-  const result = await modelRuntime.run(session.sessionId, {
-    [inputName]: {
-      data: inputData,
-      dims: [1, 3, geometry.inputHeight, geometry.inputWidth],
-      type: 'float32' as const,
-    },
-  });
-  if (result.error) {
-    throw new Error(result.error);
+
+  const runDetPass = async (
+    pixels: Uint8ClampedArray | Uint8Array,
+  ): Promise<{
+    boxes: PaddleDetBox[];
+    rejectedByScore: number;
+    mapWidth: number;
+    mapHeight: number;
+  }> => {
+    const inputData = buildPaddleDetInput(pixels, geometry.inputWidth, geometry.inputHeight);
+    const result = await modelRuntime.run(session.sessionId, {
+      [inputName]: {
+        data: inputData,
+        dims: [1, 3, geometry.inputHeight, geometry.inputWidth],
+        type: 'float32' as const,
+      },
+    });
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    const output = result.outputs[session.outputNames[0]] ?? Object.values(result.outputs)[0];
+    if (!output || !(output.data instanceof Float32Array) || output.dims.length < 3) {
+      throw new Error('PaddleOCR 检测召回：输出不是概率图');
+    }
+    const mapHeight = output.dims[output.dims.length - 2] ?? geometry.inputHeight;
+    const mapWidth = output.dims[output.dims.length - 1] ?? geometry.inputWidth;
+    const processed = postProcessDbProbMap(output.data, mapWidth, mapHeight);
+    return { ...processed, mapWidth, mapHeight };
+  };
+
+  const firstPass = await runDetPass(rgba);
+  const midtoneShare = computeMidtoneShare(rgba, geometry.inputWidth, geometry.inputHeight);
+  let boxes = firstPass.boxes;
+  let rejectedByScore = firstPass.rejectedByScore;
+  let dehalftonePassApplied = false;
+  // 网点/灰调画面，或者第一轮几乎没框出东西时，补一轮去网点后的检测。
+  if (midtoneShare >= PADDLE_DET_DEHALFTONE_MIDTONE_SHARE || boxes.length < 3) {
+    dehalftonePassApplied = true;
+    const secondPass = await runDetPass(
+      blurRgbaForDetection(rgba, geometry.inputWidth, geometry.inputHeight),
+    );
+    rejectedByScore += secondPass.rejectedByScore;
+    boxes = mergeDetBoxes(boxes, secondPass.boxes);
   }
-  const output = result.outputs[session.outputNames[0]] ?? Object.values(result.outputs)[0];
-  if (!output || !(output.data instanceof Float32Array) || output.dims.length < 3) {
-    throw new Error('PaddleOCR 检测召回：输出不是概率图');
-  }
-  const mapHeight = output.dims[output.dims.length - 2] ?? geometry.inputHeight;
-  const mapWidth = output.dims[output.dims.length - 1] ?? geometry.inputWidth;
-  const { boxes, rejectedByScore } = postProcessDbProbMap(output.data, mapWidth, mapHeight);
+  const mapWidth = firstPass.mapWidth;
+  const mapHeight = firstPass.mapHeight;
   const mapScaleX = geometry.inputWidth / Math.max(1, mapWidth);
   const mapScaleY = geometry.inputHeight / Math.max(1, mapHeight);
   const toImage = (value: number, mapScale: number, offsetScale: number): number => (
@@ -359,5 +572,7 @@ export async function detectWithPaddleDetRecall(
     rawBoxCount: boxes.length,
     rejectedByScore,
     durationMs: performance.now() - startedAt,
+    dehalftonePassApplied,
+    midtoneShare,
   };
 }

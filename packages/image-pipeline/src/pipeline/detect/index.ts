@@ -37,7 +37,8 @@ async function appendPaddleDetRecall(
     if (added > 0) {
       console.log(
         `[detector] PaddleOCR 召回补框 ${added} 个（候选 ${recall.rawBoxCount}，`
-        + `低分剔除 ${recall.rejectedByScore}，耗时 ${Math.round(recall.durationMs)}ms）`,
+        + `低分剔除 ${recall.rejectedByScore}，耗时 ${Math.round(recall.durationMs)}ms，`
+        + `去网点补检 ${recall.dehalftonePassApplied ? `已启用 中灰占比 ${(recall.midtoneShare * 100).toFixed(0)}%` : '未触发'}）`,
       );
     }
     return merged;
