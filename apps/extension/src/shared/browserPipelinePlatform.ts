@@ -14,7 +14,7 @@ import type {
   PipelineImageData,
   PipelinePlatform,
 } from '@shinobu/image-pipeline';
-import { canvasToPngBlobSync } from '@shinobu/image-pipeline/protocol';
+import { base64ToBlob, canvasToPngBlobSync } from '@shinobu/image-pipeline/protocol';
 import { encodeCanvasToPngInWorker } from './pngWorkerEncoder';
 
 const pendingFonts = new Map<string, Promise<void>>();
@@ -156,6 +156,29 @@ export const browserPipelinePlatform: PipelinePlatform = {
     }
     // Chromium's async Blob export can wait 1s for an idle task in an
     // offscreen document. This host has no visible UI, so encode synchronously.
+    return canvasToPngBlobSync(canvas);
+  },
+
+  /**
+   * 回传用编码：WebP（有损 0.95）。720×2800 的译图 PNG 常有 10–12MB，
+   * 每张都要过 offscreen → background → content 两跳，体积直接决定等待时间；
+   * WebP 同画质只有 1/10 左右，文字边缘在 0.95 档基本看不出差别。
+   */
+  encodeCanvasForTransfer(canvas: PipelineCanvas): Blob | Promise<Blob> {
+    const quality = 0.95;
+    if (typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas) {
+      return canvas.convertToBlob({ type: 'image/webp', quality }).catch(() => canvasToPngBlobSync(canvas));
+    }
+    const surface = canvas as HTMLCanvasElement;
+    try {
+      const dataUrl = surface.toDataURL('image/webp', quality);
+      const prefix = 'data:image/webp;base64,';
+      if (dataUrl.startsWith(prefix)) {
+        return base64ToBlob(dataUrl.slice(prefix.length), 'image/webp');
+      }
+    } catch {
+      // 浏览器不支持 WebP 导出时退回 PNG。
+    }
     return canvasToPngBlobSync(canvas);
   },
 

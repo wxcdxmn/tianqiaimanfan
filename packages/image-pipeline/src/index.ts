@@ -51,6 +51,12 @@ export type PipelinePlatform = PlatformProvider & {
   ): Promise<Blob>;
   /** Override PNG export when the host has a safer/faster platform-specific path. */
   encodeCanvasToPng?(canvas: PipelineCanvas): Blob | Promise<Blob>;
+  /**
+   * 回传给内容脚本用的编码。译图是中间产物（页面里直接显示、也可另存），
+   * 用 WebP 回传能把 10MB 级的 PNG 压到 1MB 上下，跨进程传输与解码都快得多。
+   * 未实现时退回 PNG。
+   */
+  encodeCanvasForTransfer?(canvas: PipelineCanvas): Blob | Promise<Blob>;
 };
 
 export type {
@@ -1447,7 +1453,13 @@ export function createImagePipeline(
         dependencies.platform.encodeCanvasToPng?.(canvas)
           ?? canvasToPngBlob(canvas)
       );
-      const image = await encodeCanvasToPng(output.artifacts.resultCanvas);
+      // 只有「回传给页面」的主图值得换成体积更小的编码；调试图与可编辑图层
+      // 还要做像素级处理，继续用无损 PNG。
+      const encodeCanvasForTransfer = (canvas: PipelineCanvas): Blob | Promise<Blob> => (
+        dependencies.platform.encodeCanvasForTransfer?.(canvas)
+          ?? encodeCanvasToPng(canvas)
+      );
+      const image = await encodeCanvasForTransfer(output.artifacts.resultCanvas);
       const debug = request.config.typesetDebug
         && output.artifacts.debugOriginalCanvas
         ? await encodeCanvasToPng(output.artifacts.debugOriginalCanvas)

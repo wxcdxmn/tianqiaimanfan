@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   exportDiagnosticLog,
+  flushDiagnosticLogNow,
   recordDiagnosticLogEvent,
+  resetDiagnosticLogStoreCache,
 } from '../../apps/extension/src/background/diagnostics/logStore';
 import type { DiagnosticLogEvent } from '../../packages/diagnostics/src/diagnosticLog';
 
@@ -60,6 +62,10 @@ function installStorage(initialDiagnosticStore: unknown): Record<string, unknown
   });
   return storage;
 }
+
+beforeEach(() => {
+  resetDiagnosticLogStoreCache();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -155,6 +161,7 @@ describe('diagnostic log store export', () => {
     expect((storage[diagnosticLogStorageKey] as { events: unknown[] }).events).toHaveLength(2);
 
     await recordDiagnosticLogEvent(createStoredEvent(2));
+    await flushDiagnosticLogNow();
 
     const persisted = storage[diagnosticLogStorageKey] as {
       events: DiagnosticLogEvent[];
@@ -164,5 +171,48 @@ describe('diagnostic log store export', () => {
     expect(persisted.events.map((event) => event.id)).toEqual(['event-0', 'event-2']);
     expect(persisted.truncated).toBe(true);
     expect(persisted.truncationReason).toContain('持久化日志中有 1 条事件格式无效，已忽略');
+  });
+});
+
+describe('diagnostic log append cost', () => {
+  it('不在每条事件上整份读写日志，只在合并窗口里落盘一次', async () => {
+    const events = Array.from({ length: 400 }, (_, index) => createStoredEvent(index));
+    const storage = installStorage({ events });
+    let writes = 0;
+    const local = (globalThis as unknown as {
+      chrome: { storage: { local: { set: (items: Record<string, unknown>, cb: () => void) => void } } };
+    }).chrome.storage.local;
+    const originalSet = local.set.bind(local);
+    local.set = (items, callback) => {
+      writes += 1;
+      originalSet(items, callback);
+    };
+
+    for (let index = 0; index < 50; index += 1) {
+      await recordDiagnosticLogEvent(createStoredEvent(1000 + index));
+    }
+
+    // 50 条事件不该产生 50 次整份写入。
+    expect(writes).toBeLessThanOrEqual(1);
+
+    await flushDiagnosticLogNow();
+
+    expect(writes).toBe(1);
+    const persisted = storage[diagnosticLogStorageKey] as { events: DiagnosticLogEvent[] };
+    expect(persisted.events).toHaveLength(450);
+    expect(persisted.events.at(-1)?.id).toBe('event-1049');
+  });
+
+  it('超过上限时丢弃最早的事件并记录裁剪原因', async () => {
+    const events = Array.from({ length: 2000 }, (_, index) => createStoredEvent(index));
+    installStorage({ events });
+
+    await recordDiagnosticLogEvent(createStoredEvent(5000));
+    await flushDiagnosticLogNow();
+
+    const exported = await exportDiagnosticLog();
+    expect(exported.eventCount).toBe(2000);
+    expect(exported.text).toContain('event-5000');
+    expect(exported.text).not.toContain('[unknown-time][INF][pipeline-host][no-run][pipeline.stage] orchestrator.ts | event-0\n');
   });
 });

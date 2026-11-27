@@ -23,7 +23,6 @@ import { isRecord } from "../utils";
 
 const diagnosticLogStorageKey = "mangaTranslate.diagnosticLog";
 const backgroundDiagnosticSessionId = createDiagnosticId("background-session");
-let diagnosticLogWriteQueue: Promise<void> = Promise.resolve();
 
 type DiagnosticLogStore = {
   events: DiagnosticLogEvent[];
@@ -120,26 +119,102 @@ async function writeDiagnosticLogStore(store: DiagnosticLogStore): Promise<void>
   await storageSet(diagnosticLogStorageKey, store);
 }
 
-async function appendDiagnosticLogEvent(event: DiagnosticLogEvent): Promise<void> {
-  const store = await readDiagnosticLogStore();
+/**
+ * 内存追加 + 合并落盘。
+ *
+ * 旧实现每来一条事件就把整份日志（一章下来两三千条、好几 MB）读出来、push 一条、
+ * 再整份写回去，并且所有调用方都在写队列上排队等待。日志越长越慢：章节末尾一张
+ * 图光「写完日志」就要几十秒，体感就是“越翻越卡、越翻越慢”。
+ *
+ * 现在的写入路径只在内存里追加（微秒级），由 400ms 的合并窗口统一落盘一次；
+ * 导出与清空会先把未落盘的增量刷下去，保证导出的就是刚跑完的内容。
+ */
+let cachedStore: DiagnosticLogStore | null = null;
+let cacheLoading: Promise<DiagnosticLogStore> | null = null;
+let logDirty = false;
+let flushHandle: ReturnType<typeof setTimeout> | null = null;
+let flushChain: Promise<void> = Promise.resolve();
+
+function loadDiagnosticLogStore(): Promise<DiagnosticLogStore> {
+  if (cachedStore) return Promise.resolve(cachedStore);
+  if (!cacheLoading) {
+    cacheLoading = readDiagnosticLogStore()
+      .then((store) => {
+        cachedStore = store;
+        return store;
+      })
+      .finally(() => {
+        cacheLoading = null;
+      });
+  }
+  return cacheLoading;
+}
+
+async function flushDiagnosticLog(): Promise<void> {
+  if (!logDirty || !cachedStore) return;
+  logDirty = false;
+  const store = cachedStore;
+  try {
+    await writeDiagnosticLogStore({ ...store, events: store.events.slice() });
+  } catch (error) {
+    logDirty = true;
+    throw error;
+  }
+}
+
+function requestDiagnosticLogFlush(): Promise<void> {
+  flushChain = flushChain.then(flushDiagnosticLog, flushDiagnosticLog);
+  return flushChain;
+}
+
+function scheduleDiagnosticLogFlush(): void {
+  if (flushHandle !== null) return;
+  flushHandle = setTimeout(() => {
+    flushHandle = null;
+    void requestDiagnosticLogFlush().catch(() => undefined);
+  }, 400);
+}
+
+/** 立刻把内存里未落盘的增量写下去（导出、清空、测试都走这里）。 */
+export function flushDiagnosticLogNow(): Promise<void> {
+  if (flushHandle !== null) {
+    clearTimeout(flushHandle);
+    flushHandle = null;
+  }
+  return requestDiagnosticLogFlush();
+}
+
+/** 仅用于测试：丢弃内存缓存与待落盘状态，下一次读取回到存储。 */
+export function resetDiagnosticLogStoreCache(): void {
+  if (flushHandle !== null) {
+    clearTimeout(flushHandle);
+    flushHandle = null;
+  }
+  cachedStore = null;
+  cacheLoading = null;
+  logDirty = false;
+  flushChain = Promise.resolve();
+}
+
+function appendDiagnosticLogEvent(event: DiagnosticLogEvent): Promise<void> {
   const normalized = createDiagnosticEvent(event, event.sessionId);
-  const events = [...store.events, normalized];
-  const overflow = Math.max(0, events.length - diagnosticLogMaxEvents);
-  const nextEvents = overflow > 0 ? events.slice(overflow) : events;
-  await writeDiagnosticLogStore({
-    events: nextEvents,
-    truncated: store.truncated || overflow > 0,
-    truncationReason: overflow > 0 ? `事件数量超过 ${diagnosticLogMaxEvents}，已丢弃最早的 ${overflow} 条` : store.truncationReason,
-  });
+  return loadDiagnosticLogStore()
+    .then((store) => {
+      store.events.push(normalized);
+      const overflow = store.events.length - diagnosticLogMaxEvents;
+      if (overflow > 0) {
+        store.events.splice(0, overflow);
+        store.truncated = true;
+        store.truncationReason = `事件数量超过 ${diagnosticLogMaxEvents}，已丢弃最早的 ${overflow} 条`;
+      }
+      logDirty = true;
+      scheduleDiagnosticLogFlush();
+    })
+    .catch(() => undefined);
 }
 
 export function recordDiagnosticLogEvent(event: DiagnosticLogEvent): Promise<void> {
-  const write = diagnosticLogWriteQueue.then(
-    () => appendDiagnosticLogEvent(event),
-    () => appendDiagnosticLogEvent(event),
-  );
-  diagnosticLogWriteQueue = write.catch(() => undefined);
-  return write;
+  return appendDiagnosticLogEvent(event);
 }
 
 export function toImageTranslateDiagnosticData(image: { base64: string; contentType: string; filename: string }): Record<string, unknown> {
@@ -193,8 +268,8 @@ export function deriveDiagnosticRuns(events: DiagnosticLogEvent[]): DiagnosticLo
 }
 
 export async function exportDiagnosticLog(): Promise<DiagnosticLogTextExport> {
-  await diagnosticLogWriteQueue.catch(() => undefined);
-  const store = await readDiagnosticLogStore();
+  await flushDiagnosticLogNow().catch(() => undefined);
+  const store = await loadDiagnosticLogStore();
   const settings = await getSettings();
   const chromeApi = getExtensionApi();
   const manifest = chromeApi?.runtime?.getManifest?.();
@@ -231,5 +306,12 @@ export async function exportDiagnosticLog(): Promise<DiagnosticLogTextExport> {
 }
 
 export async function clearDiagnosticLog(): Promise<void> {
+  if (flushHandle !== null) {
+    clearTimeout(flushHandle);
+    flushHandle = null;
+  }
+  cachedStore = { events: [] };
+  logDirty = false;
+  flushChain = Promise.resolve();
   await storageRemove(diagnosticLogStorageKey);
 }
