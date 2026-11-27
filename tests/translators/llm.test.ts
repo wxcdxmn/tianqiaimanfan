@@ -609,6 +609,14 @@ describe('llmTranslateRegions', () => {
       '5. direction=h 時，columns 表示最終橫排行分段，數量不得超過 targetLines。',
       '6. columns 每段都應是自然中文片段，盡量在標點、語氣停頓或短語邊界斷開。',
       '7. 除 JSON 外不要輸出任何內容。',
+      '品質要求：',
+      '先通讀整頁，判斷場景、人物關係與性格；同一個人前後語氣一致，不同角色之間要能聽出區別。',
+      '譯文要像中文漫畫原生台詞：短、口語、有情緒，不要翻譯腔；禁用「真是的」「的說」這類日式口頭禪的機械對應。',
+      '原文省略主語時不要補「我」，只在分不清說話人時才補。',
+      '語氣詞節制，一段台詞最多一個「啊／呢／吧」。',
+      '擬聲、擬態詞按畫面意譯（ガシャーン→哐噹），不要音譯。',
+      '敬語差用中文手段體現：尊敬用「您／請」，隨便用「你／喂」，不要生造「大人」這類稱呼。',
+      '不丟信息的前提下台詞盡量短，貼合氣泡容量；不加解釋、不做名詞註釋。',
       `輸入數據：${JSON.stringify([
         {
           id: 'region-1',
@@ -736,4 +744,43 @@ describe('免费档位并发门', () => {
     };
     await expect(callWith('glm-4.7-flash', okTransport)).resolves.toBe('译文');
   });
+
+  it('注入口语化质量规则，并按源语言补充敬语与拟声词要求', async () => {
+    const collect = async (from: string): Promise<string> => {
+      const sentMessages: unknown[] = [];
+      const { transport, observer } = installRuntimeChatCompletionMock(
+        JSON.stringify({ regions: [{ id: 'r1', translation: '译文', columns: ['译文'] }] }),
+        sentMessages,
+      );
+      await llmTranslateRegions({
+        transport,
+        observer,
+        provider: 'deepseek',
+        authMode: 'api_key',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-pro',
+        from,
+        to: 'zh-CHS',
+        regions: [{ id: 'r1', direction: 'v', text: 'おい' }],
+      });
+      return findCapturedChatBody(sentMessages).messages[1].content;
+    };
+
+    const japanese = await collect('ja');
+    expect(japanese).toContain('质量要求：');
+    expect(japanese).toContain('不要翻译腔');
+    expect(japanese).toContain('原文省略主语时不要补「我」');
+    expect(japanese).toContain('敬语差用中文手段体现');
+    expect(japanese).not.toContain('존댓말');
+
+    const korean = await collect('ko');
+    expect(korean).toContain('韩文敬语层级用中文手段体现');
+    expect(korean).not.toContain('敬语差用中文手段体现');
+
+    const english = await collect('en');
+    expect(english).toContain('不要翻译腔');
+    expect(english).not.toContain('敬语差用中文手段体现');
+    expect(english).not.toContain('존댓말');
+  });
+
 });

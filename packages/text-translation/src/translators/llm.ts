@@ -254,6 +254,53 @@ function targetStyleNoun(to: string, script: ChinesePromptScript): string {
   }
   return localizeLanguageName(to, script);
 }
+
+/**
+ * 译文口语化规则。
+ *
+ * 模型只是下限，提示词决定上限：同一批输入、同一个 deepseek-v4-pro，
+ * 不加这些约束时会输出「真是的，真没用啊」「我、我才没有害怕」这种翻译腔，
+ * 加了之后是「切，真没用。」「没、没在怕……」。
+ * 因此规则里明确禁止日式口头禅的机械对应，并要求按人物区分语气。
+ */
+function buildTranslationQualityRules(from: string, script: ChinesePromptScript): string[] {
+  const normalized = from.trim().toLowerCase();
+  const isJapanese = normalized === 'ja' || normalized === 'auto';
+  const isKorean = normalized === 'ko' || normalized === 'auto';
+
+  if (script === 'traditional') {
+    return [
+      '先通讀整頁，判斷場景、人物關係與性格；同一個人前後語氣一致，不同角色之間要能聽出區別。',
+      '譯文要像中文漫畫原生台詞：短、口語、有情緒，不要翻譯腔；禁用「真是的」「的說」這類日式口頭禪的機械對應。',
+      '原文省略主語時不要補「我」，只在分不清說話人時才補。',
+      '語氣詞節制，一段台詞最多一個「啊／呢／吧」。',
+      '擬聲、擬態詞按畫面意譯（ガシャーン→哐噹），不要音譯。',
+      ...(isJapanese
+        ? ['敬語差用中文手段體現：尊敬用「您／請」，隨便用「你／喂」，不要生造「大人」這類稱呼。']
+        : []),
+      ...(isKorean
+        ? ['韓文敬語層級用中文手段體現：존댓말→「您／請」，반말→「你／喂」；오빠／형／선배 按關係選「哥／前輩／老闆」。']
+        : []),
+      '不丟信息的前提下台詞盡量短，貼合氣泡容量；不加解釋、不做名詞註釋。',
+    ];
+  }
+
+  return [
+    '先通读整页，判断场景、人物关系与性格；同一个人前后语气一致，不同角色之间要能听出区别。',
+    '译文要像中文漫画原生台词：短、口语、有情绪，不要翻译腔；禁用「真是的」「的说」这类日式口头禅的机械对应。',
+    '原文省略主语时不要补「我」，只在分不清说话人时才补。',
+    '语气词节制，一段台词最多一个「啊／呢／吧」。',
+    '拟声、拟态词按画面意译（ガシャーン→哐当），不要音译。',
+    ...(isJapanese
+      ? ['敬语差用中文手段体现：尊敬用「您／请」，随便用「你／喂」，不要生造「大人」这类称呼。']
+      : []),
+    ...(isKorean
+      ? ['韩文敬语层级用中文手段体现：존댓말→「您／请」，반말→「你／喂」；오빠／형／선배 按关系选「哥／前辈／老板」。']
+      : []),
+    '不丢信息的前提下台词尽量短，贴合气泡容量；不加解释、不做名词注释。',
+  ];
+}
+
 function buildTweetContextPromptSection(
   context: TranslationReferenceContext | undefined,
   script: ChinesePromptScript,
@@ -381,6 +428,8 @@ function buildStructuredTranslationPrompt(
         '5. direction=h 時，columns 表示最終橫排行分段，數量不得超過 targetLines。',
         `6. columns 每段都應是自然${styleNoun}片段，盡量在標點、語氣停頓或短語邊界斷開。`,
         '7. 除 JSON 外不要輸出任何內容。',
+        '品質要求：',
+        ...buildTranslationQualityRules(from, script),
         ...(tweetContext ? tweetContext.userLines : []),
         `輸入數據：${JSON.stringify(payload)}`,
       ].join('\n'),
@@ -412,6 +461,8 @@ function buildStructuredTranslationPrompt(
       '5. direction=h 时，columns 表示最终横排行分段，数量不得超过 targetLines。',
       `6. columns 每段都应是自然${styleNoun}片段，尽量在标点、语气停顿或短语边界断开。`,
       '7. 除 JSON 外不要输出任何内容。',
+      '质量要求：',
+      ...buildTranslationQualityRules(from, script),
       ...(tweetContext ? tweetContext.userLines : []),
       `输入数据：${JSON.stringify(payload)}`,
     ].join('\n'),
