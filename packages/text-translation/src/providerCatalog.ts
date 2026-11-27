@@ -27,9 +27,11 @@ export const llmBuiltInProviderDefinitions: Record<
     defaultAuthMode: 'gemini_app',
   },
   glm: {
+    // 国内站（open.bigmodel.cn）与海外站（api.z.ai）是两套账号、两套 Key，不能混用。
+    // 这里跟国内站对齐：GLM-4.7-Flash 等免费档只在国内站开放，中文用户注册也更方便。
     label: 'GLM (智谱)', webLabel: 'GLM / Z.AI',
-    baseUrl: 'https://api.z.ai/api/paas/v4',
-    models: ['glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx'],
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    models: ['glm-4.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx'],
     defaultAuthMode: 'api_key',
   },
   kimi: {
@@ -125,6 +127,8 @@ export function detectBuiltInProviderByBaseUrl(
   if (!normalized) return null;
   if (normalized === 'https://gemini.google.com') return 'gemini';
   if (normalized === 'https://api.mimo-v2.com/v1') return 'mimo';
+  // 旧版本把 GLM 写成海外站地址，仍然认成 glm（实际请求地址以当前官方端点为准）。
+  if (normalized === 'https://api.z.ai/api/paas/v4') return 'glm';
   for (const [provider, definition] of Object.entries(
     llmBuiltInProviderDefinitions,
   )) {

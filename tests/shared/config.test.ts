@@ -81,8 +81,9 @@ describe("built-in LLM catalog", () => {
       },
       glm: {
         label: "GLM (智谱)",
-        baseUrl: "https://api.z.ai/api/paas/v4",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
         models: [
+          "glm-4.7-flash",
           "glm-5.3",
           "glm-5.3-flash",
           "glm-5.3-flashx",
@@ -165,7 +166,7 @@ describe("built-in LLM catalog", () => {
   });
 
   it.each([
-    ['glm', 'glm-5.2', 'glm-5.3'],
+    ['glm', 'glm-5.2', 'glm-4.7-flash'],
     ['openai', 'gpt-5.4-mini', 'gpt-6-astra'],
     ['kimi', 'kimi-k2.7-code-highspeed', 'kimi-k3'],
     ['minimax', 'MiniMax-M2.7-highspeed', 'MiniMax-M3'],

@@ -658,3 +658,60 @@ describe('llmTranslateRegions', () => {
     );
   });
 });
+
+describe('免费档位并发门', () => {
+  function makeConcurrencyProbe() {
+    const state = { inFlight: 0, peak: 0 };
+    const transport: TextTranslationTransport = {
+      requestChatCompletion: async () => {
+        state.inFlight += 1;
+        state.peak = Math.max(state.peak, state.inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        state.inFlight -= 1;
+        return { choices: [{ message: { content: '译文' } }] } as never;
+      },
+      translatePlain: vi.fn(async () => '译文'),
+    };
+    return { state, transport };
+  }
+
+  function callWith(model: string, transport: TextTranslationTransport) {
+    return llmTranslate({
+      transport,
+      provider: 'glm',
+      authMode: 'api_key',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      model,
+      from: 'ko',
+      to: 'zh-CHS',
+      text: '가자',
+    });
+  }
+
+  it('排队执行 GLM-4.7-Flash 请求，避免撞上免费档 1 并发限制', async () => {
+    const { state, transport } = makeConcurrencyProbe();
+    await Promise.all([callWith('glm-4.7-flash', transport), callWith('glm-4.7-flash', transport)]);
+    expect(state.peak).toBe(1);
+  });
+
+  it('付费模型仍然并发，不被免费档的队列拖慢', async () => {
+    const { state, transport } = makeConcurrencyProbe();
+    await Promise.all([callWith('glm-5.3', transport), callWith('glm-5.3', transport)]);
+    expect(state.peak).toBe(2);
+  });
+
+  it('请求失败时不会把队列卡死', async () => {
+    const transport: TextTranslationTransport = {
+      requestChatCompletion: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+      translatePlain: vi.fn(async () => '译文'),
+    };
+    await expect(callWith('glm-4.7-flash', transport)).rejects.toThrow();
+    const okTransport: TextTranslationTransport = {
+      requestChatCompletion: async () => ({ choices: [{ message: { content: '译文' } }] }) as never,
+      translatePlain: vi.fn(async () => '译文'),
+    };
+    await expect(callWith('glm-4.7-flash', okTransport)).resolves.toBe('译文');
+  });
+});

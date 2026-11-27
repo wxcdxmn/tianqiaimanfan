@@ -104,6 +104,11 @@ export const llmThinkingCapabilityRegistry: Record<string, LlmThinkingCapability
     levels: ['off', 'low', 'medium', 'high'],
     defaultLevel: 'off',
   },
+  'glm/glm-4.7-flash': {
+    // 免费档：默认关掉思考，翻译短句用不上推理，开着只会拖长时间。
+    levels: ['off', 'on'],
+    defaultLevel: 'off',
+  },
   'glm/glm-5.3': {
     levels: ['low', 'high', 'max'],
     defaultLevel: 'low',

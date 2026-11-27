@@ -21,6 +21,36 @@ import {
   type TextTranslationTransport,
 } from './transport';
 
+/**
+ * 免费档位只放开 1 个并发（GLM Flash 系列在控制台上写的就是 1 concurrent），
+ * 而自动翻译默认同时跑 2 张图，于是总有一半请求直接撞 429、整页退化成逐条重试。
+ * 这里对这类模型在进程内排队，比事后重试更省时间也不会丢整页上下文。
+ */
+const singleFlightModels = new Set([
+  'glm-4.7-flash',
+  'glm-4.5-flash',
+  'glm-4-flash-250414',
+]);
+
+let singleFlightTail: Promise<unknown> = Promise.resolve();
+
+async function withModelSingleFlight<T>(model: string, run: () => Promise<T>): Promise<T> {
+  if (!singleFlightModels.has(model.trim().toLowerCase())) {
+    return run();
+  }
+  const previous = singleFlightTail.catch(() => undefined);
+  let release!: () => void;
+  singleFlightTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
 type LlmTranslateOptions = {
   provider: LlmProvider;
   authMode: LlmAuthMode;
@@ -481,10 +511,11 @@ async function requestChatCompletion(
   });
 
   try {
-    if (!options.transport) {
+    const transport = options.transport;
+    if (!transport) {
       throw new TextTranslationTransportError('未配置文本翻译 transport');
     }
-    const response = await options.transport.requestChatCompletion({
+    const response = await withModelSingleFlight(requestBody.model, () => transport.requestChatCompletion({
       body: requestBody,
       providerBody,
       proxyConfig: {
@@ -498,7 +529,7 @@ async function requestChatCompletion(
       },
       diagnosticRunId: options.diagnosticRunId,
       signal: options.signal,
-    });
+    }));
     options.observer?.emit({
       runId: options.diagnosticRunId,
       level: 'info',

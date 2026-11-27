@@ -140,6 +140,10 @@ describe('built-in LLM thinking capabilities', () => {
         levels: ['off', 'low', 'medium', 'high'],
         defaultLevel: 'off',
       },
+      'glm/glm-4.7-flash': {
+        levels: ['off', 'on'],
+        defaultLevel: 'off',
+      },
       'glm/glm-5.3': {
         levels: ['low', 'high', 'max'],
         defaultLevel: 'low',
