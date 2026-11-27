@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { llmTranslate, llmTranslateRegions } from '../../packages/text-translation/src/translators/llm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  llmTranslate,
+  llmTranslateRegions,
+  resetLlmModelGatesForTests,
+} from '../../packages/text-translation/src/translators/llm';
 import type { DiagnosticLogObserver } from '@shinobu/diagnostics';
 import type { TextTranslationTransport } from '@shinobu/text-translation';
 
@@ -660,6 +664,10 @@ describe('llmTranslateRegions', () => {
 });
 
 describe('免费档位并发门', () => {
+  beforeEach(() => {
+    resetLlmModelGatesForTests();
+  });
+
   function makeConcurrencyProbe() {
     const state = { inFlight: 0, peak: 0 };
     const transport: TextTranslationTransport = {
@@ -688,7 +696,21 @@ describe('免费档位并发门', () => {
     });
   }
 
-  it('排队执行 GLM-4.7-Flash 请求，避免撞上免费档 1 并发限制', async () => {
+  it('GLM-4.7-Flash 默认跑 2 路并发，不再整章串行排队', async () => {
+    const { state, transport } = makeConcurrencyProbe();
+    await Promise.all([callWith('glm-4.7-flash', transport), callWith('glm-4.7-flash', transport)]);
+    expect(state.peak).toBe(2);
+  });
+
+  it('撞到 429 后降回 1 路并发，后续请求不再互相踩限流', async () => {
+    const throttled: TextTranslationTransport = {
+      requestChatCompletion: vi.fn(async () => {
+        throw Object.assign(new Error('429 Too Many Requests'), { status: 429 });
+      }),
+      translatePlain: vi.fn(async () => '译文'),
+    };
+    await expect(callWith('glm-4.7-flash', throttled)).rejects.toThrow();
+
     const { state, transport } = makeConcurrencyProbe();
     await Promise.all([callWith('glm-4.7-flash', transport), callWith('glm-4.7-flash', transport)]);
     expect(state.peak).toBe(1);

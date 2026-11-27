@@ -22,33 +22,77 @@ import {
 } from './transport';
 
 /**
- * 免费档位只放开 1 个并发（GLM Flash 系列在控制台上写的就是 1 concurrent），
- * 而自动翻译默认同时跑 2 张图，于是总有一半请求直接撞 429、整页退化成逐条重试。
- * 这里对这类模型在进程内排队，比事后重试更省时间也不会丢整页上下文。
+ * GLM 免费 flash 档控制台标称 1 并发，但串行化会让整章翻译变成 N × 单图耗时，
+ * 30 张图就要排队好几分钟。这里改成「先给 2 路，撞 429 再降回 1 路」：
+ * 多数时候能省掉一半时间，真被限流也不会一直试探。
  */
-const singleFlightModels = new Set([
+const gatedModels = new Set([
   'glm-4.7-flash',
   'glm-4.5-flash',
   'glm-4-flash-250414',
 ]);
 
-let singleFlightTail: Promise<unknown> = Promise.resolve();
+const MODEL_GATE_MAX = 2;
+const MODEL_GATE_COOLDOWN_MS = 10 * 60_000;
 
-async function withModelSingleFlight<T>(model: string, run: () => Promise<T>): Promise<T> {
-  if (!singleFlightModels.has(model.trim().toLowerCase())) {
+type ModelGate = {
+  active: number;
+  limit: number;
+  throttledUntil: number;
+  waiters: Array<() => void>;
+};
+
+const modelGates = new Map<string, ModelGate>();
+
+function isThrottleLikeError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const status = (error as { status?: unknown }).status;
+  if (status === 429) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /429|rate limit|too many requests|限流|请求过于频繁/iu.test(message);
+}
+
+async function withModelGate<T>(model: string, run: () => Promise<T>): Promise<T> {
+  const key = model.trim().toLowerCase();
+  if (!gatedModels.has(key)) {
     return run();
   }
-  const previous = singleFlightTail.catch(() => undefined);
-  let release!: () => void;
-  singleFlightTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
+  let gate = modelGates.get(key);
+  if (!gate) {
+    gate = { active: 0, limit: MODEL_GATE_MAX, throttledUntil: 0, waiters: [] };
+    modelGates.set(key, gate);
+  }
+  if (gate.throttledUntil && Date.now() >= gate.throttledUntil) {
+    gate.limit = MODEL_GATE_MAX;
+    gate.throttledUntil = 0;
+  }
+  if (gate.active < gate.limit) {
+    gate.active += 1;
+  } else {
+    // 槽位由释放方直接转交，这里不再自增，避免并发数被算高。
+    await new Promise<void>((resolve) => gate.waiters.push(resolve));
+  }
   try {
     return await run();
+  } catch (error) {
+    if (isThrottleLikeError(error)) {
+      gate.limit = 1;
+      gate.throttledUntil = Date.now() + MODEL_GATE_COOLDOWN_MS;
+    }
+    throw error;
   } finally {
-    release();
+    const next = gate.waiters.shift();
+    if (next) {
+      next();
+    } else {
+      gate.active = Math.max(0, gate.active - 1);
+    }
   }
+}
+
+/** 仅用于测试：清空并发门状态。 */
+export function resetLlmModelGatesForTests(): void {
+  modelGates.clear();
 }
 
 type LlmTranslateOptions = {
@@ -515,7 +559,7 @@ async function requestChatCompletion(
     if (!transport) {
       throw new TextTranslationTransportError('未配置文本翻译 transport');
     }
-    const response = await withModelSingleFlight(requestBody.model, () => transport.requestChatCompletion({
+    const response = await withModelGate(requestBody.model, () => transport.requestChatCompletion({
       body: requestBody,
       providerBody,
       proxyConfig: {
