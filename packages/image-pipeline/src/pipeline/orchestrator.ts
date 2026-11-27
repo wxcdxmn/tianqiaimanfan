@@ -1223,6 +1223,19 @@ export async function runPipeline(
       throwIfCancelled(signal);
       refinedMaskCanvas = refineResult.refinedMaskCanvas;
       regionOwnership = refineResult.regionOwnership;
+      if (refineResult.rectFallbackRegionIds && refineResult.rectFallbackRegionIds.length > 0) {
+        logPipelineStage(
+          options.observer,
+          config,
+          "pipeline.inpaint",
+          "检测遮罩未覆盖，改用文字框兜底擦除",
+          {
+            fallbackCount: refineResult.rectFallbackRegionIds.length,
+            regionCount: regionsWithText.length,
+            regionIds: refineResult.rectFallbackRegionIds.slice(0, 20),
+          },
+        );
+      }
       if (refineResult.debugLayers) {
         debugLayers = refineResult.debugLayers;
         eraseDebugCanvas = buildEraseDebugCanvas(originalCanvas, refineResult.debugLayers, platform, undefined);

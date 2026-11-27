@@ -10,9 +10,11 @@ import {
   LOCAL_PIPELINE_CLIENT_PORT,
   LOCAL_PIPELINE_CHUNK_SIZE,
   LOCAL_PIPELINE_HOST_PORT,
+  describeLocalPipelineHostMessageProblem,
   isLocalPipelineClientMessage,
   isLocalPipelineErrorCode,
   isLocalPipelineHostMessage,
+  isTolerableResultMeta,
   serializePipelineError,
   supportsLocalPipelineStructuredClone,
   type LocalPipelineClientMessage,
@@ -373,13 +375,38 @@ export class PipelineHostBroker {
   }
 
   private async handleHostMessage(port: ExtensionPort, value: unknown): Promise<void> {
-    if (port !== this.hostPort || !isLocalPipelineHostMessage(value)) {
-      if (port === this.hostPort) {
+    if (port !== this.hostPort) {
+      return;
+    }
+    if (!isLocalPipelineHostMessage(value)) {
+      const reason = describeLocalPipelineHostMessageProblem(value);
+      const type = typeof (value as { type?: unknown })?.type === 'string'
+        ? (value as { type: string }).type
+        : 'unknown';
+      const tolerable = isTolerableResultMeta(value) && this.jobs.has(value.jobId);
+      void this.diagnostics.emitAsync({
+        level: tolerable ? 'warn' : 'error',
+        category: 'runtime.message',
+        source: { context: 'background', module: 'offscreenBroker.ts' },
+        message: tolerable
+          ? '流水线结果消息字段不合格，已降级接受'
+          : '流水线宿主返回了无效消息',
+        data: {
+          reason,
+          type,
+          keys: value && typeof value === 'object' ? Object.keys(value as object).slice(0, 20) : [],
+        },
+      });
+      if (!tolerable) {
         this.handleHostPostFailure(codedError(
           'TRANSFER_PROTOCOL_ERROR',
           '流水线宿主返回了无效消息',
         ));
+        return;
       }
+    }
+    // 走到这里只有两种情况：消息本来就合规，或是被降级接受的 result-meta。
+    if (!isLocalPipelineHostMessage(value) && !isTolerableResultMeta(value)) {
       return;
     }
     if (value.type === 'host-ready') {

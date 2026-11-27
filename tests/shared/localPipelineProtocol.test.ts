@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPipelineRecord } from '@shinobu/image-pipeline';
 import {
+  describeLocalPipelineHostMessageProblem,
   isLocalPipelineClientMessage,
   isLocalPipelineHostMessage,
+  isTolerableResultMeta,
   LOCAL_PIPELINE_STRUCTURED_CLONE_PROBE_TYPE,
   supportsLocalPipelineStructuredClone,
 } from '@shinobu/image-pipeline/protocol';
@@ -58,5 +60,34 @@ describe('local pipeline native Blob transport validation', () => {
     expect(isLocalPipelineHostMessage({ ...result, resultBlob: new Blob(['x'], { type: 'image/jpeg' }) })).toBe(false);
     expect(isLocalPipelineHostMessage({ ...result, result: { ...result.result, chunkCount: 1, totalChars: 4 } })).toBe(false);
     expect(isLocalPipelineHostMessage({ ...result, debugBlob: result.resultBlob })).toBe(false);
+  });
+
+  it('报告具体是哪个字段导致结果消息被拒，并允许降级接受', () => {
+    const result = {
+      type: 'result-meta', jobId: 'test', status: 'completed',
+      result: { contentType: 'image/png', chunkCount: 0, totalChars: 0 },
+      resultBlob: new Blob(['png'], { type: 'image/png' }),
+      summary: { image: { width: 1, height: 1 }, detectedRegionCount: 0, stageTimings: [], runtimeStages: [] },
+      record: createPipelineRecord({ image: { width: 1, height: 1 }, ocr: [], ordered: [] }, { strategy: 'source-native' }),
+    };
+
+    expect(describeLocalPipelineHostMessageProblem(result)).toBe('ok');
+
+    const noSummary = { ...result, summary: undefined };
+    expect(isLocalPipelineHostMessage(noSummary)).toBe(false);
+    // 缺 summary 时应该指出 summary 相关字段，而不是笼统的「无效消息」。
+    expect(describeLocalPipelineHostMessageProblem(noSummary)).toContain('summary');
+    // 结果主体完整，日志字段缺失不该让整张图作废。
+    expect(isTolerableResultMeta(noSummary)).toBe(true);
+
+    const brokenRecord = { ...result, record: undefined };
+    expect(describeLocalPipelineHostMessageProblem(brokenRecord)).toBe('record');
+    expect(isTolerableResultMeta(brokenRecord)).toBe(true);
+
+    // 结果主体本身不合格时不能降级。
+    expect(isTolerableResultMeta({ ...result, result: { contentType: 'image/png' } })).toBe(false);
+    expect(isTolerableResultMeta({ ...result, status: 'running' })).toBe(false);
+    expect(describeLocalPipelineHostMessageProblem({ ...result, result: { contentType: 'image/png' } })).toBe('result-meta');
+    expect(describeLocalPipelineHostMessageProblem({})).toBe('missing-type');
   });
 });

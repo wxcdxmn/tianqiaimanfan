@@ -88,7 +88,7 @@ export function finishProgressJankMonitor(
   const report = monitor.finish();
   if (!loggedProgressJankReports.has(report.runId)) {
     loggedProgressJankReports.add(report.runId);
-    console.info('[shinobu:jank]', report);
+    console.info('[tianqiaimanfan:jank]', report);
     emitDiagnosticLog({
       runId: diagnosticRunId ?? report.runId,
       level: 'info',

@@ -279,6 +279,63 @@ export function isLocalPipelineClientMessage(value: unknown): value is LocalPipe
   }
 }
 
+/**
+ * 诊断用：说明一条宿主消息为什么没通过 isLocalPipelineHostMessage。
+ *
+ * 这条信息只在消息被判为无效时调用——此前的表现是整张图直接失败，
+ * 日志里只有一句「宿主返回了无效消息」，无法定位是哪个字段不合格。
+ */
+export function describeLocalPipelineHostMessageProblem(value: unknown): string {
+  if (!isRecord(value)) return 'not-an-object';
+  if (typeof value.type !== 'string') return 'missing-type';
+  const type = value.type;
+  if (type === 'host-ready' || type === 'idle-close') {
+    return typeof value.hostInstanceId === 'string' && value.hostInstanceId.length > 0
+      ? 'ok'
+      : 'host-instance-id';
+  }
+  if (!isJobMessage(value)) return 'missing-job-id';
+  if (type === 'result-meta') {
+    if (value.status !== 'completed' && value.status !== 'no-translatable-text') {
+      return `status:${String(value.status)}`;
+    }
+    if (!isValidArtifactMeta(value.result)) return 'result-meta';
+    if (value.debug !== undefined && !isValidArtifactMeta(value.debug)) return 'debug-meta';
+    if (value.editable !== undefined && !isValidArtifactMeta(value.editable)) return 'editable-meta';
+    if (value.resultBlob !== undefined && !isValidBinaryArtifact(value.resultBlob, value.result)) return 'result-blob';
+    if (value.debugBlob !== undefined && !isValidBinaryArtifact(value.debugBlob, value.debug)) return 'debug-blob';
+    if (value.editableBlob !== undefined && !isValidBinaryArtifact(value.editableBlob, value.editable)) return 'editable-blob';
+    if (!isValidArtifactSummary(value.summary)) {
+      const summary = isRecord(value.summary) ? value.summary : undefined;
+      const image = summary && isRecord(summary.image) ? summary.image : undefined;
+      return [
+        'summary',
+        `imageWidth=${typeof image?.width}`,
+        `imageHeight=${typeof image?.height}`,
+        `detectedRegionCount=${typeof summary?.detectedRegionCount}`,
+        `stageTimings=${Array.isArray(summary?.stageTimings)}`,
+        `runtimeStages=${Array.isArray(summary?.runtimeStages)}`,
+      ].join(',');
+    }
+    if (!isCurrentPipelineRecord(value.record)) return 'record';
+    return 'ok';
+  }
+  return isLocalPipelineHostMessage(value) ? 'ok' : type;
+}
+
+/**
+ * 结果消息的降级接受判据。
+ *
+ * 传输层把「消息不合约」当成致命错误，整张图就此丢掉——但 result 主体本身是完整的。
+ * 日志（summary/record）不合规不该让一次成功的翻译作废，满足这组最低要求就放行，
+ * 同时记一条诊断，便于后续补齐字段。
+ */
+export function isTolerableResultMeta(value: unknown): value is Extract<LocalPipelineHostMessage, { type: 'result-meta' }> {
+  if (!isRecord(value) || value.type !== 'result-meta' || !isJobMessage(value)) return false;
+  if (value.status !== 'completed' && value.status !== 'no-translatable-text') return false;
+  return isValidArtifactMeta(value.result);
+}
+
 export function isLocalPipelineHostMessage(value: unknown): value is LocalPipelineHostMessage {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;

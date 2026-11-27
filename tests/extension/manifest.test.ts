@@ -76,7 +76,7 @@ describe('dual-target extension manifests', () => {
     });
     expect(manifest.browser_specific_settings).toEqual({
       gecko: {
-        id: 'shinobu-translator@donutshinobu',
+        id: 'tianqiaimanfan@tianqiaimanfan',
         strict_min_version: '140.0',
         data_collection_permissions: {
           required: ['websiteContent', 'authenticationInfo'],

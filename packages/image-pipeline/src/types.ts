@@ -393,6 +393,8 @@ export type RefineTextMaskResult = {
   refinedMaskCanvas: PipelineCanvas;
   debugLayers?: MaskDebugLayers;
   regionOwnership?: RegionMaskOwnership;
+  /** 检测遮罩没有覆盖、最终用文字框本身兜底擦除的区域 id（用于诊断）。 */
+  rectFallbackRegionIds?: string[];
 };
 
 export type PipelineStageRegions = {

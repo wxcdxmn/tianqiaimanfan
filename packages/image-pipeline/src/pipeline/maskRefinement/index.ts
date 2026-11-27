@@ -25,6 +25,13 @@ import {
 
 export type { MaskRefinementOptions } from "./algorithms";
 
+/**
+ * 判定「这个框基本没被擦到」的覆盖比例下限。
+ * 文字笔画加膨胀通常能覆盖框面积的 20% 以上；低于这个值说明遮罩里根本没有它，
+ * 继续排版就会把译文压在原文上。
+ */
+const MIN_REGION_MASK_COVERAGE = 0.08;
+
 export type PreparedTextMaskGray = {
   sourceCanvas: PipelineCanvas;
   scaledWidth: number;
@@ -224,10 +231,14 @@ export function refineTextMask(
    * 原文就留在译文底下——这正是「翻译了但没去字」的成因。
    * 这里直接拿文字框当遮罩擦一遍：宁可多擦一小块背景，也不让原文透出来。
    */
+  const rectFallbackIds: string[] = [];
   const commitRectFallback = (index: number): void => {
     const regionBox = scaledRegions[index].box;
     if (regionBox.width <= 0 || regionBox.height <= 0) {
       return;
+    }
+    if (regions[index] && !rectFallbackIds.includes(regions[index].id)) {
+      rectFallbackIds.push(regions[index].id);
     }
     const textSize = Math.max(1, Math.min(regionBox.width, regionBox.height, scaledRegions[index].textSize));
     const dilateSize = Math.max(Math.floor(Math.floor(textSize * 0.1) / 2) * 2 + 1, 3);
@@ -333,6 +344,31 @@ export function refineTextMask(
     if (timings) timings.localDilateMs += performance.now() - regionStageStartedAt;
   }
 
+  // 覆盖审计：上面每个框各走各的分支，只要有一个分支没把像素写进 finalMask，
+  // 这个框就「有译文、没擦原文」。这里对每个框做一次兜底：框内被遮罩覆盖的比例
+  // 低于阈值（文字笔画本来只占框面积的一部分，所以阈值取很低）时，直接用框本身补擦。
+  // 这一遍与分支无关，保证「进入排版的框一定被擦到」。
+  for (let i = 0; i < scaledRegions.length; i += 1) {
+    const box = scaledRegions[i].box;
+    if (box.width <= 0 || box.height <= 0) continue;
+    const x0 = Math.max(0, Math.floor(box.x));
+    const y0 = Math.max(0, Math.floor(box.y));
+    const x1 = Math.min(scaledWidth, Math.ceil(box.x + box.width));
+    const y1 = Math.min(scaledHeight, Math.ceil(box.y + box.height));
+    if (x1 <= x0 || y1 <= y0) continue;
+    let covered = 0;
+    for (let y = y0; y < y1; y += 1) {
+      const row = y * scaledWidth;
+      for (let x = x0; x < x1; x += 1) {
+        if (finalMask[row + x]) covered += 1;
+      }
+    }
+    const total = (x1 - x0) * (y1 - y0);
+    if (total > 0 && covered / total < MIN_REGION_MASK_COVERAGE) {
+      commitRectFallback(i);
+    }
+  }
+
   const perRegionDilatedSnapshot = collectDebugLayers ? finalMask.slice() : null;
   if (timings) {
     const now = performance.now();
@@ -376,6 +412,7 @@ export function refineTextMask(
 
   return {
     refinedMaskCanvas, debugLayers,
+    ...(rectFallbackIds.length > 0 ? { rectFallbackRegionIds: rectFallbackIds } : {}),
     ...(ownership ? { regionOwnership: {
       width: scaledWidth, height: scaledHeight, regionIds: regions.map((region) => region.id), labels: ownership,
     } } : {}),
