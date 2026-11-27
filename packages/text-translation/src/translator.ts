@@ -239,6 +239,56 @@ async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
   }
 }
 
+/**
+ * 本章免费通道已确定耗尽：后续图片直接整页走 LLM，不再逐条撞 429。
+ * 进程内状态，10 分钟后自动失效，避免长期绕过免费通道。
+ */
+let preferLlmAfterThrottle = false;
+let preferLlmUntil = 0;
+const PREFER_LLM_TTL_MS = 10 * 60_000;
+
+function switchToLlmChannel(): void {
+  preferLlmAfterThrottle = true;
+  preferLlmUntil = Date.now() + PREFER_LLM_TTL_MS;
+}
+
+function shouldPreferLlmChannel(): boolean {
+  return preferLlmAfterThrottle && Date.now() < preferLlmUntil;
+}
+
+/** 仅用于测试：清空「本章改走 LLM」的记忆。 */
+export function resetTranslateChannelMemory(): void {
+  preferLlmAfterThrottle = false;
+  preferLlmUntil = 0;
+}
+
+/** 整页（所有还没有译文的条目）交给 LLM 一次带上下文翻译。 */
+async function recoverWholePageWithLlm<T extends TextTranslationRegion>(
+  next: T[],
+  config: TextTranslationConfig,
+  options: RunTranslateOptions,
+): Promise<number> {
+  // 在副本上操作：LLM 补翻失败时不能把 translationFailed 留在真实区域上，
+  // 否则退回免费通道翻译成功的框也会因为标记残留而被排版阶段跳过。
+  const snapshot = next.map((region) => ({ ...region }) as T);
+  let targets = 0;
+  for (const region of snapshot) {
+    if (!region.sourceText.trim() || region.translatedText) continue;
+    region.translationFailed = true;
+    targets += 1;
+  }
+  if (targets === 0) return 0;
+  const recovered = await llmRecoverFailedRegions(snapshot, config, options);
+  if (recovered === 0) return 0;
+  for (let index = 0; index < next.length; index += 1) {
+    const translated = snapshot[index].translatedText;
+    if (!translated) continue;
+    const { translationFailed: _failed, ...rest } = next[index] as T & { translationFailed?: boolean };
+    next[index] = { ...rest, translatedText: translated } as T;
+  }
+  return recovered;
+}
+
 function planPlainBatchGroups<T extends TextTranslationRegion>(
   regions: readonly T[],
   indexes: readonly number[],
@@ -281,6 +331,14 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       pending.push(index);
     }
   });
+
+  // 一整章漫画会连续送来十几张图，每张都要发十几条请求；免费通道按出口 IP 共享额度，
+  // 一旦这一章踩到限流，后面的图会继续按「先逐条撞 429、再补翻」的流程走一遍，
+  // 结果是整章一大半对白拿不到译文。这里记住「本章免费通道已耗尽」，
+  // 后续图片直接走 LLM，不再让每张图重新撞一轮。
+  if (shouldPreferLlmChannel() && await recoverWholePageWithLlm(next, config, options) > 0) {
+    return { regions: next, translationDebug: null };
+  }
 
   let lastRequestAt = 0;
   const throttle = async (gap: number): Promise<void> => {
@@ -379,6 +437,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
     if (throttleExhausted) {
       // 已配置 LLM 通道时，用 LLM 整页补翻失败区域，不再直接报错。
       if (await llmRecoverFailedRegions(next, config, options) > 0) {
+        switchToLlmChannel();
         return { regions: next, translationDebug: null };
       }
       throw new Error(
@@ -423,6 +482,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
     if (throttleExhausted) {
       // 已配置 LLM 通道时，用 LLM 整页补翻失败区域。
       if (await llmRecoverFailedRegions(next, config, options) > 0) {
+        switchToLlmChannel();
         return { regions: next, translationDebug: null };
       }
       console.warn(`[translate] ${failedCount}/${attemptedCount} 条翻译失败（通道限流），这些气泡保留原文`);
