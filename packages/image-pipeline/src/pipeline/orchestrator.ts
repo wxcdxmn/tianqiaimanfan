@@ -1257,6 +1257,19 @@ export async function runPipeline(
           },
         );
       }
+      if (refineResult.bubbleInkFillRegionIds && refineResult.bubbleInkFillRegionIds.length > 0) {
+        logPipelineStage(
+          options.observer,
+          config,
+          "pipeline.inpaint",
+          "气泡内残留笔画已按气泡几何补擦",
+          {
+            bubbleInkFillCount: refineResult.bubbleInkFillRegionIds.length,
+            regionCount: regionsWithText.length,
+            regionIds: refineResult.bubbleInkFillRegionIds.slice(0, 20),
+          },
+        );
+      }
       if (refineResult.debugLayers) {
         debugLayers = refineResult.debugLayers;
         eraseDebugCanvas = buildEraseDebugCanvas(originalCanvas, refineResult.debugLayers, platform, undefined);

@@ -397,6 +397,8 @@ export type RefineTextMaskResult = {
   rectFallbackRegionIds?: string[];
   /** 在平坦背景文字框里按「笔画 = 与背景不同」补擦的区域 id（用于诊断）。 */
   inkFillRegionIds?: string[];
+  /** 借用气泡分割掩码，把气泡内部（框外）也一并按笔画补擦的区域 id（用于诊断）。 */
+  bubbleInkFillRegionIds?: string[];
 };
 
 export type PipelineStageRegions = {

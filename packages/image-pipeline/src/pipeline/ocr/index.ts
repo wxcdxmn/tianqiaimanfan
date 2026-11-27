@@ -52,6 +52,10 @@ export function mapResultsToRegions(
       bgColor: result.bgColor,
       sourceText: result.text,
       translatedText: "",
+      // 气泡几何要在 OCR 之后继续传下去：擦除阶段按气泡内部补擦残留笔画、
+      // 排版阶段把译文塞进气泡，都靠这两个字段。
+      ...(detected?.bubbleBox ? { bubbleBox: { ...detected.bubbleBox } } : {}),
+      ...(detected?.bubbleMask ? { bubbleMask: detected.bubbleMask } : {}),
     };
   });
 }

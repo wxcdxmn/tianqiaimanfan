@@ -10,11 +10,14 @@ import {
   LOCAL_PIPELINE_STRUCTURED_CLONE_PROBE_TYPE,
   LocalPipelineRemoteError,
   createProtocolError,
+  describeLocalPipelineHostMessageProblem,
   isLocalPipelineHostMessage,
+  isTolerableResultMeta,
   serializePipelineError,
   splitBase64Chunks,
   type LocalPipelineArtifactSummary,
   type LocalPipelineClientMessage,
+  type LocalPipelineHostMessage,
   type LocalPipelineResult,
 } from '@shinobu/image-pipeline/protocol';
 import type {
@@ -38,6 +41,19 @@ export type RunLocalDetectionProbe = (
 ) => Promise<TextDetectionProbeResult>;
 
 export type ReadLocalDetectorSignature = () => string;
+
+/**
+ * 宿主消息的放行判据。
+ *
+ * 严格校验会把「result 主体完整、只有 record 簿记字段不合约」的结果也算作无效，
+ * 一张已经跑完的图就此整张丢弃——表现是这张图既不翻译也不擦字。这里只在
+ * 问题确实局限于 record 时放行，其余异常仍按协议错误处理。
+ */
+function acceptHostMessage(value: unknown): LocalPipelineHostMessage | null {
+  if (isLocalPipelineHostMessage(value)) return value;
+  if (describeLocalPipelineHostMessageProblem(value) !== 'record') return null;
+  return isTolerableResultMeta(value) ? (value as LocalPipelineHostMessage) : null;
+}
 
 export const readLocalDetectorSignature: ReadLocalDetectorSignature = () => {
   const runtime = getExtensionRuntime();
@@ -425,9 +441,12 @@ export const runLocalPipeline: RunLocalPipeline = (file, config, onProgress, opt
       }
     };
 
-    const onMessage = (value: unknown): void => {
+    const onMessage = (raw: unknown): void => {
       if (settled) return;
-      if (!isLocalPipelineHostMessage(value) || ('jobId' in value && value.jobId !== jobId)) {
+      // 只把 result 主体（blob + 结果元数据）当作放行条件。record 这类簿记字段
+      // 不合规时整张图会被判无效而丢弃，用户看到的就是「这张图完全没动」。
+      const value = acceptHostMessage(raw);
+      if (!value || ('jobId' in value && value.jobId !== jobId)) {
         fail(createProtocolError('后台返回了无效的本地流水线消息'));
         return;
       }

@@ -23,6 +23,7 @@ import {
   detectOutlineWidth,
   fillInkInFlatBox,
 } from "./algorithms";
+import { fillInkInBubbleInterior } from "./bubbleInk";
 
 export type { MaskRefinementOptions } from "./algorithms";
 
@@ -372,11 +373,16 @@ export function refineTextMask(
 
   // 兜底上墨：检测遮罩漏掉的笔画（行末窄字、描边、被框切断的字）必须和译文一起处理，
   // 否则译文会压在残留原文上。只在背景平坦的框（气泡/纯色底板）里做，见 fillInkInFlatBox。
+  // 气泡内的对白还要再走一遍气泡几何：文字框只包住检测器认出来的行，同一气泡里
+  // 漏掉的行走不到，译文旁边就会留着半截原文。
   const inkFillIds: string[] = [];
-  for (let i = 0; i < scaledRegions.length; i += 1) {
-    const ink = fillInkInFlatBox(scaledGray, scaledWidth, scaledHeight, scaledRegions[i].box);
-    if (!ink) continue;
-    const dilatedInk = dilate(ink.mask, ink.rect.width, ink.rect.height, 3);
+  const bubbleInkFillIds: string[] = [];
+  const applyInk = (
+    ink: { mask: Uint8Array; rect: Rect },
+    index: number,
+    radius: number,
+  ): void => {
+    const dilatedInk = dilate(ink.mask, ink.rect.width, ink.rect.height, radius);
     orSubMask(finalMask, scaledWidth, ink.rect, dilatedInk);
     if (refinedMaskBeforeDilate) {
       orSubMask(refinedMaskBeforeDilate, scaledWidth, ink.rect, ink.mask);
@@ -385,11 +391,29 @@ export function refineTextMask(
       for (let y = 0; y < ink.rect.height; y += 1) {
         for (let x = 0; x < ink.rect.width; x += 1) {
           const pixel = (ink.rect.y + y) * scaledWidth + ink.rect.x + x;
-          if (dilatedInk[y * ink.rect.width + x] && !ownership[pixel]) ownership[pixel] = i + 1;
+          if (dilatedInk[y * ink.rect.width + x] && !ownership[pixel]) ownership[pixel] = index + 1;
         }
       }
     }
-    if (regions[i] && !inkFillIds.includes(regions[i].id)) inkFillIds.push(regions[i].id);
+  };
+  for (let i = 0; i < scaledRegions.length; i += 1) {
+    const region = regions[i];
+    let filled = false;
+    const boxInk = fillInkInFlatBox(scaledGray, scaledWidth, scaledHeight, scaledRegions[i].box);
+    if (boxInk) {
+      applyInk(boxInk, i, 3);
+      filled = true;
+    }
+    const bubble = region?.bubbleMask;
+    const bubbleInk = bubble
+      ? fillInkInBubbleInterior(scaledGray, scaledWidth, scaledHeight, bubble, scaleFactor)
+      : null;
+    if (bubbleInk) {
+      applyInk(bubbleInk, i, 3);
+      filled = true;
+      if (region && !bubbleInkFillIds.includes(region.id)) bubbleInkFillIds.push(region.id);
+    }
+    if (filled && region && !inkFillIds.includes(region.id)) inkFillIds.push(region.id);
   }
 
   const perRegionDilatedSnapshot = collectDebugLayers ? finalMask.slice() : null;
@@ -437,6 +461,7 @@ export function refineTextMask(
     refinedMaskCanvas, debugLayers,
     ...(rectFallbackIds.length > 0 ? { rectFallbackRegionIds: rectFallbackIds } : {}),
     ...(inkFillIds.length > 0 ? { inkFillRegionIds: inkFillIds } : {}),
+    ...(bubbleInkFillIds.length > 0 ? { bubbleInkFillRegionIds: bubbleInkFillIds } : {}),
     ...(ownership ? { regionOwnership: {
       width: scaledWidth, height: scaledHeight, regionIds: regions.map((region) => region.id), labels: ownership,
     } } : {}),

@@ -262,7 +262,38 @@ export function mergeTextLines(regions: TextRegion[], width: number, height: num
   const groups = mergeTextRegions(quads, width, height);
 
   // Build output TextRegion[]
-  return groups.map((group) => buildMergedRegion(group));
+  return attachBubbleGeometry(groups.map((group) => buildMergedRegion(group)), regions);
+}
+
+/**
+ * 合并后的区域要继承气泡几何。
+ *
+ * 行合并会把多个 TextRegion 拼成新的对象，气泡框/气泡掩码在中途丢失。而下游
+ * 「按气泡内部补擦残留笔画」和「把译文塞进气泡」都以它为前提，丢了这两条都会
+ * 静默退化成只能处理文字框内部。这里按合并框的中心归属把气泡接回去。
+ */
+function attachBubbleGeometry(merged: TextRegion[], sources: TextRegion[]): TextRegion[] {
+  const hosts = sources.filter((region) => region.bubbleMask);
+  if (hosts.length === 0) return merged;
+  return merged.map((region) => {
+    const centerX = region.box.x + region.box.width / 2;
+    const centerY = region.box.y + region.box.height / 2;
+    const host = hosts.find((candidate) => {
+      const mask = candidate.bubbleMask;
+      if (!mask) return false;
+      return centerX >= mask.x && centerX <= mask.x + mask.width
+        && centerY >= mask.y && centerY <= mask.y + mask.height;
+    });
+    const mask = host?.bubbleMask;
+    if (!mask) return region;
+    return {
+      ...region,
+      bubbleBox: host?.bubbleBox
+        ? { ...host.bubbleBox }
+        : { x: mask.x, y: mask.y, width: mask.width, height: mask.height },
+      bubbleMask: mask,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +486,11 @@ export function mergeStackedTextFragments(regions: TextRegion[]): TextRegion[] {
   const result: TextRegion[] = [];
   for (const root of order) {
     const members = groups.get(root)!;
-    result.push(members.length === 1 ? members[0] : buildStackMergedRegion(members));
+    result.push(
+      members.length === 1
+        ? members[0]
+        : attachBubbleGeometry([buildStackMergedRegion(members)], members)[0],
+    );
   }
   return result;
 }

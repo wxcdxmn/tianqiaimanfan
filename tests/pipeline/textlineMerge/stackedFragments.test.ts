@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeStackedTextFragments } from "../../../packages/image-pipeline/src/pipeline/textlineMerge";
+import { mergeStackedTextFragments, mergeTextLines } from "../../../packages/image-pipeline/src/pipeline/textlineMerge";
 import type { TextRegion } from "../../../packages/image-pipeline/src/types";
 
 function region(
@@ -84,5 +84,48 @@ describe("mergeStackedTextFragments", () => {
   it("单个区域原样返回", () => {
     const only = region("a", [10, 10, 100, 40], "だけ");
     expect(mergeStackedTextFragments([only])).toEqual([only]);
+  });
+});
+
+describe("气泡几何继承", () => {
+  const bubble = {
+    x: 340,
+    y: 230,
+    width: 230,
+    height: 240,
+    data: new Uint8Array(230 * 240).fill(1),
+  };
+
+  it("行合并后仍然带着气泡掩码，下游才能按气泡内部补擦", () => {
+    const a = region("a", [370, 250, 160, 40], "천천히", {
+      bubbleBox: { x: 340, y: 230, width: 230, height: 240 },
+      bubbleMask: bubble,
+    });
+    const b = region("b", [370, 300, 160, 40], "가자", {
+      bubbleBox: { x: 340, y: 230, width: 230, height: 240 },
+      bubbleMask: bubble,
+    });
+
+    const merged = mergeTextLines([a, b], 720, 2800);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].bubbleMask).toBe(bubble);
+    expect(merged[0].bubbleBox).toEqual({ x: 340, y: 230, width: 230, height: 240 });
+  });
+
+  it("竖排碎片合并后也继承气泡", () => {
+    const a = region("a", [400, 240, 100, 44], "아무튼", {
+      bubbleBox: { x: 340, y: 230, width: 230, height: 240 },
+      bubbleMask: bubble,
+    });
+    const b = region("b", [358, 273, 197, 182], "그 힘은\n조심해", {
+      bubbleBox: { x: 340, y: 230, width: 230, height: 240 },
+      bubbleMask: bubble,
+    });
+
+    const merged = mergeStackedTextFragments([a, b]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].bubbleMask).toBe(bubble);
   });
 });
