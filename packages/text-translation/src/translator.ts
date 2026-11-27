@@ -23,12 +23,14 @@ const PLAIN_PROVIDER_BY_TRANSLATOR: Record<Exclude<TextTranslatorKind, 'llm'>, P
   google_web: 'google',
   bing_web: 'bing',
   mymemory_web: 'mymemory',
+  deeplx_web: 'deeplx',
 };
 
 const PLAIN_ENGINE_LABEL: Record<Exclude<TextTranslatorKind, 'llm'>, string> = {
   google_web: '谷歌翻译',
   bing_web: '必应翻译',
   mymemory_web: 'MyMemory',
+  deeplx_web: 'DeepLX',
 };
 
 function plainProviderFor(translator: TextTranslatorKind | undefined): PlainTranslationProvider | undefined {

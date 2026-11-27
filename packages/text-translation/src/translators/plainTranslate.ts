@@ -1,9 +1,10 @@
 import { bingWebTranslateMany } from './bingWeb';
+import { deepLxTranslateMany } from './deepLx';
 import { googleWebTranslateMany } from './googleWeb';
 import { myMemoryTranslateMany } from './myMemory';
 import { isAbortError, isRetryableProviderError, readErrorStatus } from './errors';
 
-export type PlainTranslateProviderId = 'google' | 'bing' | 'mymemory';
+export type PlainTranslateProviderId = 'google' | 'bing' | 'mymemory' | 'deeplx';
 
 export type PlainTranslateOptions = {
   from: string;
@@ -145,6 +146,22 @@ const PROVIDERS: readonly Provider[] = [
       });
       if (output.length !== texts.length) {
         throw new Error(`MyMemory 返回 ${output.length} 条，期望 ${texts.length} 条`);
+      }
+      return output;
+    },
+  },
+  {
+    id: 'deeplx',
+    label: 'DeepLX',
+    async translate(texts, options) {
+      const output = await deepLxTranslateMany({
+        texts,
+        from: options.from,
+        to: options.to,
+        signal: options.signal,
+      });
+      if (output.length !== texts.length) {
+        throw new Error(`DeepLX 返回 ${output.length} 条，期望 ${texts.length} 条`);
       }
       return output;
     },

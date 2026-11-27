@@ -194,6 +194,7 @@ export const translationServiceOptions: ReadonlyArray<{
   { value: 'google_web', label: '谷歌翻译' },
   { value: 'bing_web', label: '必应翻译' },
   { value: 'mymemory_web', label: 'MyMemory' },
+  { value: 'deeplx_web', label: 'DeepLX' },
   { value: 'llm', label: '大模型' },
 ];
 

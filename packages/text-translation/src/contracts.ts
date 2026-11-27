@@ -58,10 +58,10 @@ export type ChatCompletionTransportRequest = {
   signal?: AbortSignal;
 };
 
-export type PlainTranslationProvider = 'google' | 'bing' | 'mymemory';
+export type PlainTranslationProvider = 'google' | 'bing' | 'mymemory' | 'deeplx';
 
 /** 免费网页接口：每个引擎独立工作，选中哪个就只走哪个，不自动换引擎。 */
-export type PlainTranslatorKind = 'google_web' | 'bing_web' | 'mymemory_web';
+export type PlainTranslatorKind = 'google_web' | 'bing_web' | 'mymemory_web' | 'deeplx_web';
 
 export type TextTranslatorKind = PlainTranslatorKind | 'llm';
 
@@ -69,6 +69,7 @@ export const TEXT_TRANSLATOR_KINDS: readonly TextTranslatorKind[] = [
   'google_web',
   'bing_web',
   'mymemory_web',
+  'deeplx_web',
   'llm',
 ];
 
