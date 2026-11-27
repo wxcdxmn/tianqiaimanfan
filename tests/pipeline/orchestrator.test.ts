@@ -24,6 +24,7 @@ const pipelineMocks = vi.hoisted(() => ({
   drawRegions: vi.fn(),
   mergeTextLines: vi.fn(),
   mergeStackedTextFragments: vi.fn(),
+  coalesceBubbleRegions: vi.fn(),
   refineTextMask: vi.fn(),
   prepareReadingPanels: vi.fn(),
   sortRegionsForRender: vi.fn(),
@@ -76,6 +77,7 @@ vi.mock('../../packages/image-pipeline/src/pipeline/visualize', () => ({
 vi.mock('../../packages/image-pipeline/src/pipeline/textlineMerge', () => ({
   mergeTextLines: pipelineMocks.mergeTextLines,
   mergeStackedTextFragments: pipelineMocks.mergeStackedTextFragments,
+  coalesceBubbleRegions: pipelineMocks.coalesceBubbleRegions,
 }));
 vi.mock('../../packages/image-pipeline/src/pipeline/maskRefinement', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../packages/image-pipeline/src/pipeline/maskRefinement')>(),
@@ -234,6 +236,7 @@ beforeEach(() => {
   pipelineMocks.drawRegions.mockReturnValue(visualizedCanvas);
   pipelineMocks.mergeTextLines.mockImplementation((regions: TextRegion[]) => regions);
   pipelineMocks.mergeStackedTextFragments.mockImplementation((regions: TextRegion[]) => regions);
+  pipelineMocks.coalesceBubbleRegions.mockImplementation((regions: TextRegion[]) => regions);
   pipelineMocks.refineTextMask.mockReturnValue({ refinedMaskCanvas });
   pipelineMocks.prepareReadingPanels.mockReturnValue([]);
   pipelineMocks.sortRegionsForRender.mockImplementation((regions: TextRegion[]) => regions);

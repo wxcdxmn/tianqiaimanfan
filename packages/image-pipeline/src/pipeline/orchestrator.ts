@@ -24,7 +24,7 @@ import { preparePaddleOcrRuntime, warmupPaddleOcrRuntime } from "./ocr/paddleocr
 import { prepareInpaintSource, runInpaint, type PreparedInpaintSource } from "./inpaint";
 import { drawTypeset } from "./typeset";
 import { drawRegions } from "./visualize";
-import { mergeStackedTextFragments, mergeTextLines } from "./textlineMerge";
+import { coalesceBubbleRegions, mergeStackedTextFragments, mergeTextLines } from "./textlineMerge";
 import { planUntranslatedRestore } from "./untranslatedRestore";
 import {
   filterOcrRegions,
@@ -968,6 +968,22 @@ export async function runPipeline(
         `[bubble] ${matchResult.unmatchedCount} 个文字区域未匹配到气泡:`,
         matchResult.unmatchedRegionIds,
       );
+    }
+    // 气泡归属比行几何更能证明「这几行是同一句话」：同一个气泡里只有一段
+    // 连续台词。几何合并漏掉的居中短行在这里补合，交给翻译层整句处理，
+    // 否则两份译文会各自排版并叠回同一个气泡。
+    const beforeCoalesce = latestRegions.length;
+    latestRegions = coalesceBubbleRegions(
+      latestRegions,
+      image.naturalWidth,
+      image.naturalHeight,
+    );
+    if (latestRegions.length < beforeCoalesce) {
+      stageRegions.merged = cloneTextRegions(latestRegions);
+      logPipelineStage(options.observer, config, "pipeline.stage", "气泡内文字并段", {
+        regionCountBefore: beforeCoalesce,
+        regionCountAfter: latestRegions.length,
+      });
     }
   }
   // Matched masks remain reachable through their regions; unmatched masks can

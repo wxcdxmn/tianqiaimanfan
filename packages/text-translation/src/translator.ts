@@ -29,6 +29,30 @@ type StructuredTranslationResult = {
   translatedColumns?: string[];
 };
 
+/**
+ * 免费通道「请求成功但根本没翻」的判定。
+ *
+ * Google 网页接口对一部分输入会原样回吐：整段韩文对白、纯大写站点名、
+ * 带装饰符号的短句都见过。这些条目以前被算成翻译成功，于是气泡被擦掉、
+ * 又把原文写回去——读者看到的就是「一大半台词没翻」。
+ * 判成失败之后，可以走已有的补翻与 LLM 兜底链路。
+ */
+export function looksUntranslated(
+  source: string,
+  translated: string,
+  targetLang: string,
+): boolean {
+  const target = targetLang.trim().toLowerCase();
+  const isChineseTarget = target === 'zh-chs' || target === 'zh' || target === 'zh-cht' || target === 'zh-tw';
+  if (!isChineseTarget) return false;
+  const output = translated.replace(/\s+/gu, '');
+  if (!output) return true;
+  // 译文里有汉字就是翻了；没有汉字才需要怀疑。
+  if (/[\u3400-\u9fff]/u.test(output)) return false;
+  // 原文本身没有汉字（韩文/日文假名/拉丁文），译文却一个汉字也没有 → 原样返回。
+  return /[\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Latin}]/u.test(source);
+}
+
 function assertTextTranslationProvider(config: TextTranslationConfig): void {
   if (config.llmProvider === 'gemini') {
     throw new Error('Nano Banana 使用端到端译图流程，不支持 OCR 文本翻译流程');
@@ -365,7 +389,9 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
         }
         group.forEach((index, position) => {
           const translated = output[position]?.trim();
-          if (translated) {
+          // 原样回吐的条目留空，交给下面的逐条通道再试一条：
+          // 合并通道会把多行压成一行，逐条通道发原文，两者结果可能不同。
+          if (translated && !looksUntranslated(regions[index].sourceText, translated, config.targetLang)) {
             next[index].translatedText = translated;
           }
         });
@@ -382,6 +408,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
 
   const attemptedCount = pending.length;
   let failedCount = 0;
+  let untranslatedCount = 0;
   let throttleExhausted = false;
 
   for (const index of pending) {
@@ -400,6 +427,11 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       await throttle(GOOGLE_REQUEST_GAP_MS);
       try {
         translatedText = await translateOne(source, config, options);
+        if (translatedText && looksUntranslated(source, translatedText, config.targetLang)) {
+          // 原样回吐：同样的输入重试也一样，直接进补翻 / LLM 兜底。
+          untranslatedCount += 1;
+          translatedText = '';
+        }
         break;
       } catch (error) {
         if (options.signal?.aborted) throw error;
@@ -460,7 +492,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       } catch {
         translatedText = '';
       }
-      if (!translatedText) {
+      if (!translatedText || looksUntranslated(region.sourceText, translatedText, config.targetLang)) {
         continue;
       }
       recoveredCount += 1;
@@ -497,7 +529,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       try {
         await delay(GOOGLE_REQUEST_GAP_MS, options.signal);
         const translatedText = await translateOne(region.sourceText, config, options);
-        if (!translatedText) continue;
+        if (!translatedText || looksUntranslated(region.sourceText, translatedText, config.targetLang)) continue;
         const { translationFailed: _failed, ...rest } = region;
         next[index] = { ...rest, translatedText } as T;
         recoveredCount += 1;
@@ -516,6 +548,15 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       }
       console.warn(`[translate] ${failedCount}/${attemptedCount} 条翻译失败，这些气泡保留原文`);
     }
+  }
+
+  if (untranslatedCount > 0) {
+    emitTranslateDiagnostic(config, options, 'warn', '免费通道原样回吐未翻译的条目，已交给补翻兜底', {
+      untranslatedCount,
+      attemptedCount,
+      failedCount,
+      targetLang: config.targetLang,
+    });
   }
 
   return { regions: next, translationDebug: null };

@@ -494,3 +494,106 @@ export function mergeStackedTextFragments(regions: TextRegion[]): TextRegion[] {
   }
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// 气泡内并段：同一气泡里的零散文字块合成一整段台词
+// ---------------------------------------------------------------------------
+
+/** 气泡占整页面积超过这个比例时视为无框白底/整页框，不再按它并段。 */
+const BUBBLE_COALESCE_MAX_PAGE_SHARE = 0.5;
+/** 组内主导方向至少占这个比例才合并：横排与竖排混烧会算坏外框。 */
+const BUBBLE_COALESCE_MIN_DIRECTION_SHARE = 0.6;
+
+function bubbleIdentity(region: TextRegion): string | null {
+  const bubble = region.bubbleBox;
+  if (!bubble) return null;
+  return `${bubble.x}:${bubble.y}:${bubble.width}:${bubble.height}`;
+}
+
+function dominantDirectionShare(members: readonly TextRegion[]): number {
+  const horizontal = members.filter((member) => (member.direction ?? "h") === "h").length;
+  return Math.max(horizontal, members.length - horizontal) / Math.max(1, members.length);
+}
+
+function coalescedBubbleRegion(members: TextRegion[]): TextRegion {
+  const merged = buildStackMergedRegion(members);
+  const host = members.find((member) => member.bubbleMask) ?? members[0];
+  const bubbleBox = host.bubbleBox
+    ?? (host.bubbleMask
+      ? {
+        x: host.bubbleMask.x,
+        y: host.bubbleMask.y,
+        width: host.bubbleMask.width,
+        height: host.bubbleMask.height,
+      }
+      : undefined);
+  // 行数按「声明的行数」与「实际换行数」取大：上游若漏标，排版会按偏少的行数
+  // 撑大字号，译文反而溢出气泡。
+  const lineCount = members.reduce((sum, member) => {
+    const actualLines = member.sourceText.split("\n").filter((line) => line.trim()).length;
+    return sum + Math.max(1, member.originalLineCount ?? 1, actualLines);
+  }, 0);
+  return {
+    ...merged,
+    originalLineCount: lineCount,
+    bubbleBox: bubbleBox ? { ...bubbleBox } : undefined,
+    bubbleMask: host.bubbleMask,
+  };
+}
+
+/**
+ * 气泡内并段。
+ *
+ * 行合并是按几何做判定的：气泡里居中排版的短句（「둘이 진정으로」这种首行）
+ * 左右边缘都和下一行对不上，容易被切成两个区域；两个区域各自翻译，
+ * 排版时又叠回同一个气泡，读者看到的就是断句、重复甚至互相压字。
+ * 气泡归属（matchRegionsToBubbles）是比几何更强的证据：同一个气泡里只有
+ * 一段连续的台词，因此按气泡框分组直接合成一段，交给翻译层整句处理。
+ *
+ * 保守设定：
+ * - 只处理「中心落在气泡内」的区域（气泡归属已在上游算好）；
+ * - 气泡占整页一半以上时跳过，避免把满屏白底当成一个大气泡吃掉整页文字；
+ * - 组内方向必须一致，横竖排混在一起时外框会算歪，宁可不动。
+ */
+export function coalesceBubbleRegions(
+  regions: TextRegion[],
+  pageWidth: number,
+  pageHeight: number,
+): TextRegion[] {
+  if (regions.length < 2) {
+    return regions;
+  }
+  const pageArea = Math.max(1, pageWidth * pageHeight);
+  const groups = new Map<string, TextRegion[]>();
+  const order: Array<string | number> = [];
+  regions.forEach((region, index) => {
+    const key = bubbleIdentity(region) ?? index;
+    const bucket = groups.get(String(key));
+    if (bucket) {
+      bucket.push(region);
+    } else {
+      groups.set(String(key), [region]);
+      order.push(key);
+    }
+  });
+
+  const result: TextRegion[] = [];
+  for (const key of order) {
+    const members = groups.get(String(key))!;
+    if (members.length < 2) {
+      result.push(...members);
+      continue;
+    }
+    const bubble = members[0].bubbleBox;
+    const bubbleShare = bubble
+      ? (bubble.width * bubble.height) / pageArea
+      : 0;
+    if (bubbleShare > BUBBLE_COALESCE_MAX_PAGE_SHARE
+      || dominantDirectionShare(members) < BUBBLE_COALESCE_MIN_DIRECTION_SHARE) {
+      result.push(...members);
+      continue;
+    }
+    result.push(coalescedBubbleRegion(members));
+  }
+  return result;
+}

@@ -14,7 +14,7 @@ export {
 export type * from './pipeline/ocr/provider';
 export { runInpaint } from './pipeline/inpaint';
 export { drawTypeset } from './pipeline/typeset';
-export { mergeTextLines } from './pipeline/textlineMerge';
+export { coalesceBubbleRegions, mergeTextLines } from './pipeline/textlineMerge';
 export { refineTextMask } from './pipeline/maskRefinement';
 export { sortRegionsForRender } from './pipeline/readingOrder';
 export {
