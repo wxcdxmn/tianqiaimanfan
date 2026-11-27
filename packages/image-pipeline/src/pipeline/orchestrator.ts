@@ -113,6 +113,8 @@ export type PipelineRunOptions = {
   platform?: PlatformProvider;
   modelRuntime?: ModelRuntime;
   detectionFallbackStrategy: DetectionFallbackStrategy;
+  /** PaddleOCR v6 通用检测器召回兜底；缺省开启，显式 false 关闭。 */
+  paddleDetRecall?: boolean;
   textTranslator?: TextTranslator;
   classifyVisionRegions?: VisionRegionClassifier;
   observer?: DiagnosticLogObserver;
@@ -639,6 +641,7 @@ export async function runPipeline(
           modelRuntime,
           options.detectionFallbackStrategy,
           onDetectorSubmitted,
+          { paddleDetRecall: options.paddleDetRecall },
         );
     throwIfCancelled(signal);
     latestRegions = detected.regions;

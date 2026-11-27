@@ -50,6 +50,15 @@
       "normalize": "minus_one_to_one",
       "channelOrder": "bgr"
     },
+    "paddleocr_v6_medium_det": {
+      "name": "paddleocr_v6_medium_det",
+      "task": "text-detection-recall",
+      "url": "/models/PP-OCRv6_medium_det.onnx",
+      "size": 62032837,
+      "sha256": "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1",
+      "input": [960, 960],
+      "runtime": ["webgpu", "webnn", "wasm"]
+    },
     "paddleocr_v6_medium_rec": {
       "name": "paddleocr_v6_medium_rec",
       "task": "paddleocr-recognition",
