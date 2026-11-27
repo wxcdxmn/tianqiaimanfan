@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dilate } from '../../packages/image-pipeline/src/pipeline/maskRefinement/algorithms';
+import { dilate, fillInkInFlatBox } from '../../packages/image-pipeline/src/pipeline/maskRefinement/algorithms';
 
 function loopOracle(mask: Uint8Array, width: number, height: number, kernelSize: number): Uint8Array {
   if (kernelSize <= 1) return mask.slice();
@@ -57,5 +57,61 @@ describe('mask dilation', () => {
       expect(dilate(mask, width, height, kernelSize)).toEqual(loopOracle(mask, width, height, kernelSize));
       expect(mask).toEqual(before);
     }
+  });
+});
+
+describe('flat box ink fill', () => {
+  function makeFlatImage(width: number, height: number, background = 236): Uint8Array {
+    return new Uint8Array(width * height).fill(background);
+  }
+
+  function paintRect(
+    gray: Uint8Array,
+    width: number,
+    rect: { x: number; y: number; width: number; height: number },
+    value: number,
+  ): void {
+    for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+        gray[y * width + x] = value;
+      }
+    }
+  }
+
+  it('marks strokes that the detector mask missed inside a flat bubble box', () => {
+    const width = 60, height = 40;
+    const gray = makeFlatImage(width, height);
+    // 两段笔画模拟一行文字，其中右边那一段就是检测框漏掉的窄字。
+    paintRect(gray, width, { x: 8, y: 14, width: 14, height: 8 }, 40);
+    paintRect(gray, width, { x: 28, y: 14, width: 4, height: 8 }, 40);
+
+    const result = fillInkInFlatBox(gray, width, height, { x: 4, y: 10, width: 34, height: 18 });
+    expect(result).not.toBeNull();
+    const mask = result!.mask;
+    expect(mask[4 * result!.rect.width + 8]).toBe(1);
+    expect(mask[4 * result!.rect.width + 24]).toBe(1);
+    expect(mask[1 * result!.rect.width + 1]).toBe(0);
+    expect(result!.rect).toEqual({ x: 4, y: 10, width: 34, height: 18 });
+  });
+
+  it('refuses boxes whose background is artwork instead of a flat plate', () => {
+    const width = 40, height = 40;
+    const gray = new Uint8Array(width * height);
+    let state = 0x1234567;
+    for (let i = 0; i < gray.length; i += 1) {
+      state = (state * 1103515245 + 12345) >>> 0;
+      gray[i] = state >>> 24;
+    }
+    expect(fillInkInFlatBox(gray, width, height, { x: 2, y: 2, width: 30, height: 30 })).toBeNull();
+  });
+
+  it('refuses flat boxes with no strokes and clamps boxes to the image bounds', () => {
+    const width = 30, height = 20;
+    const gray = makeFlatImage(width, height);
+    expect(fillInkInFlatBox(gray, width, height, { x: 2, y: 2, width: 10, height: 10 })).toBeNull();
+
+    paintRect(gray, width, { x: 20, y: 10, width: 6, height: 6 }, 0);
+    const clamped = fillInkInFlatBox(gray, width, height, { x: 16, y: 6, width: 40, height: 40 });
+    expect(clamped?.rect).toEqual({ x: 16, y: 6, width: 14, height: 14 });
   });
 });

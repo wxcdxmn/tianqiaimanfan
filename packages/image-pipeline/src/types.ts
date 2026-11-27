@@ -395,6 +395,8 @@ export type RefineTextMaskResult = {
   regionOwnership?: RegionMaskOwnership;
   /** 检测遮罩没有覆盖、最终用文字框本身兜底擦除的区域 id（用于诊断）。 */
   rectFallbackRegionIds?: string[];
+  /** 在平坦背景文字框里按「笔画 = 与背景不同」补擦的区域 id（用于诊断）。 */
+  inkFillRegionIds?: string[];
 };
 
 export type PipelineStageRegions = {

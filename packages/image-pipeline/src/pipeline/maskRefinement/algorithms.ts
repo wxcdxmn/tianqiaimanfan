@@ -556,6 +556,116 @@ export function refineRegionMask(gray: Uint8Array, seedMask: Uint8Array): Uint8A
   return chosen;
 }
 
+export type FlatBoxInkOptions = {
+  /** 框内「接近背景色」的像素至少占多少比例，才认为这是气泡/纯色底板。 */
+  minFlatShare?: number;
+  /** 与背景灰度的差超过这个值就算笔画像素。 */
+  inkDelta?: number;
+  /** 笔画像素占比的上下限：太低说明没字，太高说明这是画面而不是文字框。 */
+  minInkShare?: number;
+  maxInkShare?: number;
+};
+
+export type FlatBoxInkResult = {
+  /** 与 `rect` 同尺寸的笔画掩码，1 表示需要擦除。 */
+  mask: Uint8Array;
+  rect: Rect;
+  /** 框内接近背景色的像素占比。 */
+  flatShare: number;
+  /** 笔画像素占比。 */
+  inkShare: number;
+};
+
+/**
+ * 兜底上墨：把「背景基本平坦」的文字框里所有与背景色不同的像素（也就是笔画）标成 1。
+ *
+ * 检测模型给出的连通域偶尔会漏掉笔画——尤其是行末一个窄字（例如韩文「고」）、
+ * 带描边的粗体边缘、以及被检测框切断的字。漏掉的笔画不会被擦除，排版后译文就压在
+ * 原文上，看起来像「翻译了但没去字」。
+ *
+ * 只在气泡这类「背景是一整块浅色」的框里启用：先用灰度直方图求背景色，要求框内
+ * 大半像素都贴近背景色；再按与背景的差值取笔画。背景是画面/网点时直接放弃，
+ * 避免把画稿当成字擦掉。
+ */
+export function fillInkInFlatBox(
+  gray: Uint8Array,
+  width: number,
+  height: number,
+  rect: Rect,
+  options: FlatBoxInkOptions = {},
+): FlatBoxInkResult | null {
+  const x0 = Math.max(0, Math.floor(rect.x));
+  const y0 = Math.max(0, Math.floor(rect.y));
+  const x1 = Math.min(width, Math.ceil(rect.x + rect.width));
+  const y1 = Math.min(height, Math.ceil(rect.y + rect.height));
+  const boxWidth = x1 - x0;
+  const boxHeight = y1 - y0;
+  if (boxWidth <= 0 || boxHeight <= 0) {
+    return null;
+  }
+
+  const histogram = new Uint32Array(256);
+  const total = boxWidth * boxHeight;
+  for (let y = y0; y < y1; y += 1) {
+    const row = y * width;
+    for (let x = x0; x < x1; x += 1) {
+      histogram[gray[row + x]] += 1;
+    }
+  }
+
+  // 中位灰度当背景：文字笔画无论黑白都只占少数，中位数不会落在笔画上。
+  const half = total >> 1;
+  let cumulative = 0;
+  let median = 0;
+  for (let value = 0; value < 256; value += 1) {
+    cumulative += histogram[value];
+    if (cumulative > half) {
+      median = value;
+      break;
+    }
+  }
+  let sum = 0;
+  let count = 0;
+  for (let value = Math.max(0, median - 12); value <= Math.min(255, median + 12); value += 1) {
+    sum += value * histogram[value];
+    count += histogram[value];
+  }
+  const background = count > 0 ? sum / count : median;
+
+  const inkDelta = options.inkDelta ?? 30;
+  const flatTolerance = Math.max(10, inkDelta * 0.4);
+  let flatCount = 0;
+  let inkCount = 0;
+  const mask = new Uint8Array(total);
+  for (let y = 0; y < boxHeight; y += 1) {
+    const row = (y0 + y) * width + x0;
+    for (let x = 0; x < boxWidth; x += 1) {
+      const delta = Math.abs(gray[row + x] - background);
+      if (delta <= flatTolerance) {
+        flatCount += 1;
+      } else if (delta > inkDelta) {
+        mask[y * boxWidth + x] = 1;
+        inkCount += 1;
+      }
+    }
+  }
+
+  const flatShare = flatCount / total;
+  const inkShare = inkCount / total;
+  if (flatShare < (options.minFlatShare ?? 0.45)) {
+    return null;
+  }
+  if (inkShare < (options.minInkShare ?? 0.01) || inkShare > (options.maxInkShare ?? 0.6)) {
+    return null;
+  }
+  return {
+    mask,
+    rect: { x: x0, y: y0, width: boxWidth, height: boxHeight },
+    flatShare,
+    inkShare,
+  };
+}
+
 const BRIGHT_THRESHOLD = 40;
 const OUTLINE_RATIO_THRESHOLD = 0.5;
 

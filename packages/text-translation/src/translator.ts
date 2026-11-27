@@ -1,4 +1,5 @@
 import type { DiagnosticLogObserver } from '@shinobu/diagnostics';
+import { toDiagnosticError } from '@shinobu/diagnostics';
 import type {
   TextTranslationConfig,
   TextTranslationRegion,
@@ -143,6 +144,30 @@ function toBatchLine(text: string): string {
  * 用户在设置里配置过 LLM API Key 时生效；未配置（请求被 transport 拒绝）
  * 则安静放弃，保持原有免费通道行为。
  */
+function emitTranslateDiagnostic(
+  config: TextTranslationConfig,
+  options: RunTranslateOptions,
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  data?: Record<string, unknown>,
+  error?: unknown,
+): void {
+  if (!options.observer) return;
+  try {
+    options.observer.emit({
+      runId: config.diagnosticRunId,
+      level,
+      category: 'pipeline.stage',
+      source: { context: 'worker', module: 'text-translation/translator.ts' },
+      message,
+      data,
+      ...(error === undefined ? {} : { error: toDiagnosticError(error) }),
+    });
+  } catch {
+    // 诊断上报永远不影响翻译结果。
+  }
+}
+
 async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
   next: T[],
   config: TextTranslationConfig,
@@ -183,16 +208,33 @@ async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
       console.info(
         `[translate] 免费通道失败 ${failed.length} 条，已用 LLM 通道补翻成功 ${recoveredCount} 条`,
       );
+      emitTranslateDiagnostic(config, options, 'info', '免费通道失败，已用 LLM 补翻', {
+        failedCount: failed.length,
+        recoveredCount,
+        provider: config.llmProvider,
+        model: config.llmModel,
+      });
     }
     return recoveredCount;
   } catch (error) {
     if (options.signal?.aborted) {
       throw error;
     }
+    const message = error instanceof Error ? error.message : String(error);
     console.debug(
       '[translate] LLM 补翻不可用（未配置 API Key 或请求失败），保留免费通道结果:',
-      error instanceof Error ? error.message : error,
+      message,
     );
+    // 这条以前只打到 console，导出日志里看不到：只要 LLM 这条兜底路径坏了，
+    // 用户看到的就是「一大半对白没翻译」，而日志里一片安静。
+    emitTranslateDiagnostic(config, options, 'warn', 'LLM 补翻不可用，这些对白会保留原文', {
+      failedCount: failed.length,
+      provider: config.llmProvider,
+      authMode: config.llmAuthMode,
+      baseUrl: config.llmBaseUrl,
+      model: config.llmModel,
+      reason: message,
+    }, error);
     return 0;
   }
 }
@@ -305,6 +347,11 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
         if (options.signal?.aborted) throw error;
         if (isThrottleExhausted(error)) {
           throttleExhausted = true;
+          emitTranslateDiagnostic(config, options, 'warn', '免费翻译通道（Google/Bing/MyMemory）全部限流，剩余对白不再逐条重试', {
+            attemptedCount,
+            failedCount,
+            reason: error instanceof Error ? error.message : String(error),
+          }, error);
           break;
         }
         if (attempt >= GOOGLE_MAX_ATTEMPTS || !isRetryableTranslationError(error)) {

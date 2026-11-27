@@ -938,12 +938,20 @@ export async function runPipeline(
   report(onProgress, "merge", "合并文本行");
   try {
     const t0 = performance.now();
+    const beforeMergeCount = latestRegions.length;
     const lineMerged = mergeTextLines(latestRegions, image.naturalWidth, image.naturalHeight);
     // 兜底：把“首行窄框 + 余下多行块”这类被上游漏合的碎片合回一段，
     // 否则两组译文会各自排版并叠在同一个气泡里。
     latestRegions = mergeStackedTextFragments(lineMerged);
     stageRegions.merged = cloneTextRegions(latestRegions);
     stageTimings.push({ stage: "merge", label: "合并文本行", durationMs: performance.now() - t0 });
+    // 合并前后的区域数决定了这一页会发多少个翻译请求：OCR 行数远大于合并后的块数时，
+    // 说明一整个气泡被当成一段；反过来合并数≈OCR 数说明气泡被切碎了，译文会断句。
+    logPipelineStage(options.observer, config, "pipeline.stage", "文本行合并完成", {
+      ocrRegionCount: beforeMergeCount,
+      mergedRegionCount: latestRegions.length,
+      withTextCount: latestRegions.filter((region) => region.sourceText.trim() !== '').length,
+    });
   } catch (error) {
     throw new PipelineStageError("merge", "文本行合并", toErrorDetail(error), buildArtifacts(), "image", error);
   }
@@ -1236,6 +1244,19 @@ export async function runPipeline(
           },
         );
       }
+      if (refineResult.inkFillRegionIds && refineResult.inkFillRegionIds.length > 0) {
+        logPipelineStage(
+          options.observer,
+          config,
+          "pipeline.inpaint",
+          "检测遮罩漏掉笔画，已按框内笔画补擦",
+          {
+            inkFillCount: refineResult.inkFillRegionIds.length,
+            regionCount: regionsWithText.length,
+            regionIds: refineResult.inkFillRegionIds.slice(0, 20),
+          },
+        );
+      }
       if (refineResult.debugLayers) {
         debugLayers = refineResult.debugLayers;
         eraseDebugCanvas = buildEraseDebugCanvas(originalCanvas, refineResult.debugLayers, platform, undefined);
@@ -1310,6 +1331,26 @@ export async function runPipeline(
     const [translatedRegions, inpaintedCanvas] = await Promise.all([translateTask, eraseTask]);
     throwIfCancelled(signal);
     latestRegions = translatedRegions;
+    {
+      // 这一条决定用户「看到多少对白被翻译」：拿到译文的区域才会排版，
+      // 没译文的区域会把原图像素贴回去（看起来就是「没动过」）。
+      // 以前只有 console.warn，日志导出里看不到，只能靠猜。
+      const withText = translatedRegions.filter((region) => region.sourceText.trim() !== '').length;
+      const failed = translatedRegions.filter((region) => region.translationFailed === true).length;
+      logPipelineStage(options.observer, config, "pipeline.stage", "翻译结果汇总", {
+        regionCount: translatedRegions.length,
+        withTextCount: withText,
+        translatedCount: withText - failed,
+        failedCount: failed,
+        failedRegionIds: translatedRegions
+          .filter((region) => region.translationFailed === true)
+          .slice(0, 20)
+          .map((region) => region.id.slice(0, 8)),
+        translator: config.translator,
+        sourceLang: config.sourceLang,
+        targetLang: config.targetLang,
+      });
+    }
     if (config.processMode === 'translate') {
       // 去字与翻译是并行的，去字阶段不可能知道哪些框最终没拿到译文。
       // 这些框的原文已经被擦掉，这里把原始像素贴回去：没翻译就该看起来「没动过」，
