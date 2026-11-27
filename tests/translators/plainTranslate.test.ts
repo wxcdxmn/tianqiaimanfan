@@ -335,6 +335,34 @@ describe('免费通道的合并翻译', () => {
     expect(result.regions.every((region) => region.translatedText.startsWith('单:'))).toBe(true);
   });
 
+  it('多行区域送进合并通道时压成单行，避免译文按行错位', async () => {
+    const { transport, batches, singles } = createBatchTransport(
+      async (request) => request.texts.map((text) => `合:${text}`),
+      async (request) => `单:${request.text}`,
+    );
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf(
+        '몬스터들과\n본드래곤을',
+        '이번 사건을\n계기로\n카시드노바는',
+      ),
+      config: createConfig(),
+    });
+
+    // 每一条都必须是不含换行的单行，否则合并通道按行切回来时会串位。
+    expect(batches).toHaveLength(1);
+    expect(batches[0].texts).toEqual([
+      '몬스터들과 본드래곤을',
+      '이번 사건을 계기로 카시드노바는',
+    ]);
+    expect(singles).toHaveLength(0);
+    expect(result.regions.map((region) => region.translatedText)).toEqual([
+      '合:몬스터들과 본드래곤을',
+      '合:이번 사건을 계기로 카시드노바는',
+    ]);
+  });
+
   it('通道全部限流时快速失败，不逐条空转', async () => {
     const { transport, singles } = createBatchTransport(
       async () => {

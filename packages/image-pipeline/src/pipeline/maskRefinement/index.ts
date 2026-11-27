@@ -217,10 +217,51 @@ export function refineTextMask(
   const ownership = collectRegionOwnership ? new Int32Array(scaledWidth * scaledHeight) : undefined;
   const refinedMaskBeforeDilate = collectDebugLayers ? new Uint8Array(scaledWidth * scaledHeight) : null;
 
+  /**
+   * 兜底擦除：这个框在检测遮罩里一个像素都没归属到。
+   *
+   * OCR 已经确认框里有字，如果只是跳过不擦，排版阶段仍会把译文画上去，
+   * 原文就留在译文底下——这正是「翻译了但没去字」的成因。
+   * 这里直接拿文字框当遮罩擦一遍：宁可多擦一小块背景，也不让原文透出来。
+   */
+  const commitRectFallback = (index: number): void => {
+    const regionBox = scaledRegions[index].box;
+    if (regionBox.width <= 0 || regionBox.height <= 0) {
+      return;
+    }
+    const textSize = Math.max(1, Math.min(regionBox.width, regionBox.height, scaledRegions[index].textSize));
+    const dilateSize = Math.max(Math.floor(Math.floor(textSize * 0.1) / 2) * 2 + 1, 3);
+    const rect = extendRect(regionBox, scaledWidth, scaledHeight, Math.ceil(dilateSize / 2));
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    const local = new Uint8Array(rect.width * rect.height).fill(1);
+    const dilated = dilate(local, rect.width, rect.height, dilateSize);
+    orSubMask(finalMask, scaledWidth, rect, dilated);
+    if (refinedMaskBeforeDilate) {
+      orSubMask(refinedMaskBeforeDilate, scaledWidth, rect, local);
+    }
+    if (ownership) {
+      const rect3 = extendRect(rect, scaledWidth, scaledHeight, Math.ceil(Math.max(1, kernelSize) / 2));
+      const owned = new Uint8Array(rect3.width * rect3.height);
+      orSubMask(owned, rect3.width, {
+        x: rect.x - rect3.x, y: rect.y - rect3.y, width: rect.width, height: rect.height,
+      }, dilated);
+      const expanded = dilate(owned, rect3.width, rect3.height, Math.max(1, kernelSize));
+      for (let y = 0; y < rect3.height; y++) {
+        for (let x = 0; x < rect3.width; x++) {
+          const pixel = (rect3.y + y) * scaledWidth + rect3.x + x;
+          if (expanded[y * rect3.width + x] && !ownership[pixel]) ownership[pixel] = index + 1;
+        }
+      }
+    }
+  };
+
   for (let i = 0; i < scaledRegions.length; i += 1) {
     const regionComponents = assigned[i];
     const extent = extents[i];
     if (!extent || regionComponents.length === 0) {
+      commitRectFallback(i);
       continue;
     }
 
@@ -244,6 +285,7 @@ export function refineTextMask(
     const ccRegion = extractSubMask(regionMask, scaledWidth, rect1);
     if (!hasForeground(ccRegion)) {
       if (timings) timings.refineMs += performance.now() - regionStageStartedAt;
+      commitRectFallback(i);
       continue;
     }
     const grayRegion = extractSubGray(scaledGray, scaledWidth, rect1);

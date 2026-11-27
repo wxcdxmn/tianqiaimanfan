@@ -25,6 +25,7 @@ import { prepareInpaintSource, runInpaint, type PreparedInpaintSource } from "./
 import { drawTypeset } from "./typeset";
 import { drawRegions } from "./visualize";
 import { mergeStackedTextFragments, mergeTextLines } from "./textlineMerge";
+import { planUntranslatedRestore } from "./untranslatedRestore";
 import {
   filterOcrRegions,
 } from "./ocrPostFilter";
@@ -60,6 +61,51 @@ type ProgressCallback = (progress: PipelineProgress) => void;
  */
 const MIN_OCR_ALTERNATE_MODEL_REGIONS = 3;
 const MIN_OCR_ALTERNATE_MODEL_SHARE = 0.25;
+
+/**
+ * 没拿到译文的区域把原始像素贴回去。
+ *
+ * 去字阶段与翻译阶段并行，去字时并不知道哪些框最终会翻译失败；失败的框于是被擦成空白，
+ * 排版又跳过它们，读者看到的是一片被抹掉的对白。这里按框把原图局部还原，
+ * 让「没翻译」表现为「这处没动过」。被还原的框同时标记 translationFailed，
+ * 排版阶段据此跳过，避免再把原文叠一遍。
+ */
+function restoreUntranslatedRegions(
+  cleaned: PipelineCanvas,
+  original: PipelineCanvas,
+  regions: TextRegion[],
+): Set<string> {
+  const restored = new Set<string>();
+  const { restore } = planUntranslatedRestore(regions);
+  if (restore.length === 0) {
+    return restored;
+  }
+  const targetContext = cleaned.getContext('2d');
+  const sourceContext = original.getContext('2d');
+  if (!targetContext || !sourceContext) {
+    return restored;
+  }
+  for (const region of restore) {
+    const x = Math.max(0, Math.floor(region.box.x));
+    const y = Math.max(0, Math.floor(region.box.y));
+    const right = Math.min(cleaned.width, Math.ceil(region.box.x + region.box.width));
+    const bottom = Math.min(cleaned.height, Math.ceil(region.box.y + region.box.height));
+    const width = right - x;
+    const height = bottom - y;
+    if (width <= 0 || height <= 0) {
+      continue;
+    }
+    try {
+      targetContext.putImageData(sourceContext.getImageData(x, y, width, height), x, y);
+      region.translationFailed = true;
+      restored.add(region.id);
+    } catch {
+      // 跨域画布或像素读取失败：保持擦除结果，不阻断整页。
+      break;
+    }
+  }
+  return restored;
+}
 
 export type PipelineRunOptions = {
   signal?: AbortSignal;
@@ -1251,6 +1297,18 @@ export async function runPipeline(
     const [translatedRegions, inpaintedCanvas] = await Promise.all([translateTask, eraseTask]);
     throwIfCancelled(signal);
     latestRegions = translatedRegions;
+    if (config.processMode === 'translate') {
+      // 去字与翻译是并行的，去字阶段不可能知道哪些框最终没拿到译文。
+      // 这些框的原文已经被擦掉，这里把原始像素贴回去：没翻译就该看起来「没动过」，
+      // 而不是留一个被抹白的空洞。
+      const restoredIds = restoreUntranslatedRegions(inpaintedCanvas, originalCanvas, latestRegions);
+      if (restoredIds.size > 0) {
+        logPipelineStage(options.observer, config, "pipeline.typeset", "未翻译区域回填原文", {
+          restoredCount: restoredIds.size,
+          ids: [...restoredIds].map((id) => id.slice(0, 8)),
+        });
+      }
+    }
     if (config.typesetDebug) {
       // 排版调试开启时记录每个区域的原文与译文：气泡漏翻、重复排版都靠这份数据定位。
       logPipelineStage(options.observer, config, "pipeline.typeset", "调试：区域文本", {

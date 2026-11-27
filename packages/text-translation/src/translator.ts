@@ -129,6 +129,16 @@ export const PLAIN_BATCH_MAX_CHARS = 1200;
 export const PLAIN_BATCH_GAP_MS = 320;
 
 /**
+ * 合并通道把多条文本用换行拼成一个请求，再按换行切回。
+ * 漫画的一个文字区域常带内部换行（多行对白），直接拼进去会让「行数」远多于「条数」，
+ * 切回来时就按行错位——译文跑到隔壁气泡，或者整组退化成逐条。
+ * 送进合并通道前先把内部换行压成空格，保证一「条」就是一「行」。
+ */
+function toBatchLine(text: string): string {
+  return text.replace(/[ \t]*[\r\n]+[ \t]*/g, ' ').trim();
+}
+
+/**
  * 免费通道失败后的 LLM 自动补救：整页失败区域一次合并请求带上下文补翻。
  * 用户在设置里配置过 LLM API Key 时生效；未配置（请求被 transport 拒绝）
  * 则安静放弃，保持原有免费通道行为。
@@ -245,7 +255,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       await throttle(PLAIN_BATCH_GAP_MS);
       try {
         const output = await batch.call(options.transport, {
-          texts: group.map((index) => regions[index].sourceText),
+          texts: group.map((index) => toBatchLine(regions[index].sourceText)),
           from: config.sourceLang,
           to: config.targetLang,
           signal: options.signal,
