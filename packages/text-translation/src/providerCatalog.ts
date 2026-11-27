@@ -31,7 +31,9 @@ export const llmBuiltInProviderDefinitions: Record<
     // 这里跟国内站对齐：GLM-4.7-Flash 等免费档只在国内站开放，中文用户注册也更方便。
     label: 'GLM (智谱)', webLabel: 'GLM / Z.AI',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    models: ['glm-4.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx'],
+    // 首位放 glm-4-flash：实测同一账号下 glm-4.7-flash 免费档会长期返回 1302
+    // （速率限制），25 行对白整页翻译直接失败；glm-4-flash 稳定可用。
+    models: ['glm-4-flash', 'glm-4.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx'],
     defaultAuthMode: 'api_key',
   },
   kimi: {

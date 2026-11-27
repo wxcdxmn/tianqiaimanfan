@@ -40,18 +40,24 @@ describe('built-in LLM thinking capabilities', () => {
     }
   });
 
-  it('omits the thinking field for GLM free flash models so the preset matches the custom-model path', () => {
-    for (const model of ['glm-4.7-flash', 'glm-4.5-flash']) {
-      const body = { model, messages: [] };
-      const preset = adaptLlmThinkingChatCompletionRequest(body, { provider: 'glm', model, level: 'off' });
-      const custom = adaptLlmThinkingChatCompletionRequest(body, {
-        provider: 'glm', model, level: 'off', useCustomModel: true,
-      });
-      expect(preset).not.toHaveProperty('thinking');
-      expect(preset).toEqual(custom);
-    }
-    expect(adaptLlmThinkingChatCompletionRequest({ model: 'glm-4.7-flash', messages: [] }, {
-      provider: 'glm', model: 'glm-4.7-flash', level: 'on',
+  it('always sends thinking.disabled for GLM flash so it does not fall back to the slow default reasoning mode', () => {
+    const model = 'glm-4.7-flash';
+    const body = { model, messages: [] };
+    const preset = adaptLlmThinkingChatCompletionRequest(body, { provider: 'glm', model, level: 'off' });
+    expect(preset.thinking).toEqual({ type: 'disabled' });
+    // 勾了「自定义」再手输同一个模型名，也必须照样关掉思考，否则请求会退化成默认思考模式。
+    const custom = adaptLlmThinkingChatCompletionRequest(body, {
+      provider: 'glm', model, level: 'off', useCustomModel: true,
+    });
+    expect(custom.thinking).toEqual({ type: 'disabled' });
+    expect(preset).toEqual(custom);
+    expect(body).not.toHaveProperty('thinking');
+    // 完全不在预设目录里的自定义模型名仍然原样发送。
+    expect(adaptLlmThinkingChatCompletionRequest({ model: 'glm-custom-x', messages: [] }, {
+      provider: 'glm', model: 'glm-custom-x', level: 'off', useCustomModel: true,
+    })).toEqual({ model: 'glm-custom-x', messages: [] });
+    expect(adaptLlmThinkingChatCompletionRequest({ model, messages: [] }, {
+      provider: 'glm', model, level: 'on',
     }).thinking).toEqual({ type: 'enabled' });
   });
 
@@ -153,6 +159,10 @@ describe('built-in LLM thinking capabilities', () => {
       },
       'doubao/doubao-seed-2-1-turbo-260628': {
         levels: ['off', 'low', 'medium', 'high'],
+        defaultLevel: 'off',
+      },
+      'glm/glm-4-flash': {
+        levels: ['off'],
         defaultLevel: 'off',
       },
       'glm/glm-4.7-flash': {

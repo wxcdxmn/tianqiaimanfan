@@ -46,7 +46,6 @@ export function isLlmThinkingConfigurationRejection(options: {
 }): boolean {
   return (
     (options.status === 400 || options.status === 422)
-    && !options.useCustomModel
     && getLlmThinkingCapability(options.provider, options.model) !== null
     && isLlmThinkingConfigurationErrorDetail(options.errorDetail)
   );
@@ -102,6 +101,11 @@ export const llmThinkingCapabilityRegistry: Record<string, LlmThinkingCapability
   },
   'doubao/doubao-seed-2-1-turbo-260628': {
     levels: ['off', 'low', 'medium', 'high'],
+    defaultLevel: 'off',
+  },
+  'glm/glm-4-flash': {
+    // 非推理模型，没有思考档位；适配时固定发送 thinking.disabled（官方接口接受该值）。
+    levels: ['off'],
     defaultLevel: 'off',
   },
   'glm/glm-4.7-flash': {
@@ -204,7 +208,9 @@ export function getLlmThinkingControl(provider: LlmProvider, model: string): Llm
     return {
       kind: 'fixed',
       options,
-      notice: '该模型不支持关闭思考模式',
+      notice: options[0].value === 'on'
+        ? '该模型不支持关闭思考模式'
+        : '该模型不支持思考模式',
     };
   }
   if (capability.levels.length === 2 && capability.levels[0] === 'off' && capability.levels[1] === 'on') {
@@ -269,11 +275,14 @@ export function adaptLlmThinkingChatCompletionRequest(
   body: LlmChatCompletionRequestBody,
   context: LlmThinkingRequestContext,
 ): LlmChatCompletionRequestBody {
-  if (context.provider === 'custom' || context.useCustomModel) {
+  if (context.provider === 'custom') {
     return { ...body };
   }
 
   const capability = getLlmThinkingCapability(context.provider, context.model);
+  // 自定义模型名默认原样发送；但手输的名字如果正好命中内置预设（例如勾了自定义
+  // 又填 glm-4.7-flash），仍然要按预设规则适配，否则思考开关被静默丢弃，
+  // 模型回到默认思考模式，同一页翻译慢好几倍。
   if (!capability) {
     return { ...body };
   }
@@ -325,12 +334,9 @@ export function adaptLlmThinkingChatCompletionRequest(
   }
 
   if (context.provider === 'glm' || context.provider === 'doubao') {
-    // 智谱免费 flash 档不认 thinking 字段，带上会直接 400：
-    // 表现就是「下拉选 glm-4.7-flash 必失败，勾自定义手输同名模型反而能通」。
-    // 关闭思考本来等于默认行为，干脆不发这个字段。
-    if (context.provider === 'glm' && level === 'off' && /flash/iu.test(context.model)) {
-      return request;
-    }
+    // 必须显式发送 thinking.disabled：glm-4.7-flash 不传这个字段时会默认开启思考，
+    // 实测同一句话「翻译成中文：Hello world」不带字段要 3.7s / 217 推理 token，
+    // 带上 disabled 只要 0.56s / 0 推理 token。整页翻译的耗时差就是这么来的。
     request.thinking = {
       type: level === 'off' ? 'disabled' : 'enabled',
     };
