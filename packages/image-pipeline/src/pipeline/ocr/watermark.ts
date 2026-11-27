@@ -107,3 +107,33 @@ function isPromoCopy(text: string): boolean {
   if (SENTENCE_END_PATTERN.test(compact)) return false;
   return PROMO_PATTERNS.some((pattern) => pattern.test(compact));
 }
+
+/**
+ * 行级水印判定：合并文本行之前，对每条 OCR 行单独过一遍强证据。
+ *
+ * 背景：isSiteWatermarkRegion 作用在「合并后的区域」上，判定的是整段文本；
+ * 而条漫水印（如汉化组站名）常常贴在气泡附近，行合并会把它并进真正的
+ * 对白区域——合并后的整段文本既长、又带句末标点，区域级判定全部失效，
+ * 水印原文就跟着对白一起被翻译、嵌进气泡（实测「TEMPLESCANESPNET」混进
+ * 台词后译文变成「101 BM OER TEMPLESCANESPNET Q 您还想听到…」）。
+ *
+ * 这里只认硬证据（域名/链接/账号/截断站名），且要求命中部分占整行的
+ * 绝大多数，避免误伤「提到某网站」的正常台词。
+ */
+export function isWatermarkOcrLine(text: string): boolean {
+  const compact = text.replace(/\s+/gu, '');
+  if (!compact) return false;
+  if (LINK_PATTERN.test(text)) return true;
+  if (HANDLE_PATTERN.test(text)) return true;
+  const domainMatch = compact.match(DOMAIN_PATTERN);
+  if (domainMatch && domainMatch[0].length / compact.length >= 0.6) return true;
+  // 截断站名沿用区域级的保守护栏：短、无句末标点才判。
+  if (
+    Array.from(compact).length <= 28
+    && !SENTENCE_END_PATTERN.test(compact)
+    && TRUNCATED_SITE_PATTERN.test(compact)
+  ) {
+    return true;
+  }
+  return false;
+}

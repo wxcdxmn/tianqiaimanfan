@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isSiteWatermarkRegion } from '../../../packages/image-pipeline/src/pipeline/ocr/watermark';
+import { isSiteWatermarkRegion, isWatermarkOcrLine } from '../../../packages/image-pipeline/src/pipeline/ocr/watermark';
 
 const PAGE = { w: 720, h: 8439 };
 /** 截图里那张条漫：720×2800 的一屏，水印位置按实际比例折算。 */
@@ -81,5 +81,44 @@ describe('站点水印判定', () => {
 
   it('空文本不判定为水印', () => {
     expect(isSiteWatermarkRegion(region('', { x: 100, y: 10, width: 400, height: 30 }), PAGE.w, PAGE.h)).toBe(false);
+  });
+});
+
+describe('行级水印判定（isWatermarkOcrLine）', () => {
+  it('命中 OCR 截断/变形的汉化组站名——合并前进拦截', () => {
+    // toontop.io 实测:这些行被并进对白区域后,译文变成
+    // 「101 BM OER TEMPLESCANESPNET Q 您还想听到…」
+    expect(isWatermarkOcrLine('TEMPLESCANESPNET')).toBe(true);
+    expect(isWatermarkOcrLine('TEMPLESCANESPNE')).toBe(true);
+    expect(isWatermarkOcrLine('TEMPLESCANESP.NET')).toBe(true);
+    expect(isWatermarkOcrLine('OMEGASCANS.ORG')).toBe(true);
+    expect(isWatermarkOcrLine('manga18fx.com')).toBe(true);
+  });
+
+  it('域名占整行绝大多数时命中,混在长台词里时不命中', () => {
+    expect(isWatermarkOcrLine('VISITA TEMPLESCANESP.NET')).toBe(true);
+    // 域名只占一行的一小部分:更像台词里提到的网址,不丢整行。
+    expect(isWatermarkOcrLine('leelo en temple scan esp net que es muy buena la serie')).toBe(false);
+    expect(isWatermarkOcrLine('SABES QUE AHORA LE TOCA A JINA')).toBe(false);
+  });
+
+  it('链接与账号行一律命中', () => {
+    expect(isWatermarkOcrLine('https://t.me/somechannel')).toBe(true);
+    expect(isWatermarkOcrLine('@someartist')).toBe(true);
+    expect(isWatermarkOcrLine('www.manga18fx.com')).toBe(true);
+  });
+
+  it('无强证据的噪声行不误杀(留给上层过滤)', () => {
+    // 纯垃圾但构不成域名/站名证据:行级判定宁可放过。
+    expect(isWatermarkOcrLine('101 BM OER')).toBe(false);
+    expect(isWatermarkOcrLine('OS0')).toBe(false);
+    expect(isWatermarkOcrLine('QUERRÁS OÍR')).toBe(false);
+    // 带句末标点的「站名句」按台词处理。
+    expect(isWatermarkOcrLine('TempleScan.net es lo mejor!')).toBe(false);
+  });
+
+  it('空行不判定', () => {
+    expect(isWatermarkOcrLine('')).toBe(false);
+    expect(isWatermarkOcrLine('   ')).toBe(false);
   });
 });

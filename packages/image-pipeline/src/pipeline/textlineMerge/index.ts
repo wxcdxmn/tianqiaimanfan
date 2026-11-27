@@ -10,6 +10,7 @@
 
 import type { SourceTextLineGeometry, TextRegion, TextDirection, QuadPoint, Rect } from "../../types";
 import { minAreaRect, type Quad } from "../typeset/geometry";
+import { isWatermarkOcrLine } from "../ocr/watermark";
 import type { InternalQuad, MergedGroup } from "./mergePredicates";
 import { buildInternalQuad, mergeTextRegions } from "./mergePredicates";
 
@@ -255,8 +256,13 @@ export function mergeTextLines(regions: TextRegion[], width: number, height: num
     return [];
   }
 
+  // 行级水印拦截：水印行一旦被并进对白区域，区域级判定（isSiteWatermarkRegion）
+  // 就会因为整段文本变长、带句末标点而失效，水印原文会被翻译、嵌进气泡。
+  // 在建合并图之前按强证据丢弃这些行（详见 isWatermarkOcrLine 注释）。
+  const mergeable = regions.filter((region) => !isWatermarkOcrLine(region.sourceText));
+
   // Convert TextRegion[] to InternalQuad[]
-  const quads = regions.map((r, i) => buildInternalQuad(r, i));
+  const quads = mergeable.map((r, i) => buildInternalQuad(r, i));
 
   // Run merge
   const groups = mergeTextRegions(quads, width, height);
