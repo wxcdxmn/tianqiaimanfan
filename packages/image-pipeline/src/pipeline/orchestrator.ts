@@ -26,6 +26,7 @@ import { drawTypeset } from "./typeset";
 import { drawRegions } from "./visualize";
 import { coalesceBubbleRegions, mergeStackedTextFragments, mergeTextLines } from "./textlineMerge";
 import { planUntranslatedRestore } from "./untranslatedRestore";
+import { repairResidualRegions } from "./residualInk";
 import {
   filterOcrRegions,
 } from "./ocrPostFilter";
@@ -1392,6 +1393,29 @@ export async function runPipeline(
         logPipelineStage(options.observer, config, "pipeline.typeset", "未翻译区域回填原文", {
           restoredCount: restoredIds.size,
           ids: [...restoredIds].map((id) => id.slice(0, 8)),
+        });
+      }
+    }
+    if (config.processMode !== 'original') {
+      // 遮罩/分带任何一环出偏差，结果都是译文画上去、原文还在底下。
+      // 这里逐框比对像素，还有残留就按背景补掉，保证排版前底板是干净的。
+      const residualTargets = latestRegions.filter((region) =>
+        region.sourceText.trim() !== ''
+        && region.translationFailed !== true
+        && (config.processMode === 'erase' || region.translatedText.trim() !== ''));
+      const residualReport = repairResidualRegions(
+        inpaintedCanvas,
+        originalCanvas,
+        residualTargets,
+        platform,
+      );
+      if (residualReport.regionIds.length > 0) {
+        logPipelineStage(options.observer, config, "pipeline.inpaint", "擦除残留已按背景修复", {
+          repairedCount: residualReport.regionIds.length,
+          regionCount: residualTargets.length,
+          repairedPixels: residualReport.repairedPixels,
+          worstResidualRatio: Math.round(residualReport.worstRatio * 100) / 100,
+          regionIds: residualReport.regionIds.slice(0, 20).map((id) => id.slice(0, 8)),
         });
       }
     }
