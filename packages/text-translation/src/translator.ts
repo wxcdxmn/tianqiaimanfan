@@ -17,6 +17,7 @@ import {
   llmTranslateRegions,
 } from './translators/llm';
 import { resolveSourceLanguage } from './detectLanguage';
+import { matchLocalPhrase } from './translators/localPhrases';
 
 /** 用户选中的引擎 → transport 的通道 id；选一次就只用这一个，不跨引擎降级。 */
 const PLAIN_PROVIDER_BY_TRANSLATOR: Record<Exclude<TextTranslatorKind, 'llm'>, PlainTranslationProvider> = {
@@ -78,6 +79,15 @@ export function looksUntranslated(
   if (/[\u3400-\u9fff]/u.test(output)) return false;
   // 原文本身没有汉字（韩文/日文假名/拉丁文），译文却一个汉字也没有 → 原样返回。
   return /[\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Latin}]/u.test(source);
+}
+
+/**
+ * 原样回吐时用本地固定映射兜底。
+ * 只处理拟声词/语气词与 OCR 噪声，不碰正文台词；不命中就保持空串走补翻。
+ */
+function resolveLocalPhraseFallback(source: string): string {
+  const match = matchLocalPhrase(source);
+  return match?.kind === 'translate' ? match.text : '';
 }
 
 function assertTextTranslationProvider(config: TextTranslationConfig): void {
@@ -224,9 +234,26 @@ async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
   config: TextTranslationConfig,
   options: RunTranslateOptions,
 ): Promise<number> {
-  const failed = next.filter((region) => region.translationFailed && region.sourceText.trim());
-  if (failed.length === 0 || config.llmProvider === 'gemini') {
+  let failed = next.filter((region) => region.translationFailed && region.sourceText.trim());
+  if (failed.length === 0) {
     return 0;
+  }
+  // 拟声词/OCR 噪声不必发 LLM：本地映射直接落地，剩下才需要真正的翻译。
+  let localRecovered = 0;
+  for (const region of failed) {
+    const local = resolveLocalPhraseFallback(region.sourceText);
+    if (!local) continue;
+    const { translationFailed: _failed, ...rest } = region;
+    delete (region as { translationFailed?: boolean }).translationFailed;
+    Object.assign(region, rest, { translatedText: local });
+    localRecovered += 1;
+  }
+  failed = failed.filter((region) => region.translationFailed);
+  if (failed.length === 0) {
+    return localRecovered;
+  }
+  if (config.llmProvider === 'gemini') {
+    return localRecovered;
   }
   try {
     const result = await llmTranslateRegions({
@@ -266,7 +293,7 @@ async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
         model: config.llmModel,
       });
     }
-    return recoveredCount;
+    return recoveredCount + localRecovered;
   } catch (error) {
     if (options.signal?.aborted) {
       throw error;
@@ -286,7 +313,7 @@ async function llmRecoverFailedRegions<T extends TextTranslationRegion>(
       model: config.llmModel,
       reason: message,
     }, error);
-    return 0;
+    return localRecovered;
   }
 }
 
@@ -420,8 +447,14 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
           const translated = output[position]?.trim();
           // 原样回吐的条目留空，交给下面的逐条通道再试一条：
           // 合并通道会把多行压成一行，逐条通道发原文，两者结果可能不同。
-          if (translated && !looksUntranslated(regions[index].sourceText, translated, config.targetLang)) {
-            next[index].translatedText = translated;
+          if (translated) {
+            if (!looksUntranslated(regions[index].sourceText, translated, config.targetLang)) {
+              next[index].translatedText = translated;
+            } else {
+              // 短拟声词合并后必然回吐：直接落本地映射，省掉一次逐条往返。
+              const local = resolveLocalPhraseFallback(regions[index].sourceText);
+              if (local) next[index].translatedText = local;
+            }
           }
         });
       } catch (error) {
@@ -457,9 +490,14 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       try {
         translatedText = await translateOne(source, config, options);
         if (translatedText && looksUntranslated(source, translatedText, config.targetLang)) {
-          // 原样回吐：同样的输入重试也一样，直接进补翻 / LLM 兜底。
-          untranslatedCount += 1;
-          translatedText = '';
+          // 原样回吐：先试本地拟声词映射；不命中才进补翻 / LLM 兜底。
+          const local = resolveLocalPhraseFallback(source);
+          if (local) {
+            translatedText = local;
+          } else {
+            untranslatedCount += 1;
+            translatedText = '';
+          }
         }
         break;
       } catch (error) {

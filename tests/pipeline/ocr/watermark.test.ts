@@ -28,6 +28,11 @@ describe('站点水印判定', () => {
     expect(isSiteWatermarkRegion(region('最新地址newxtoon5.com', { x: 250, y: 900, width: 260, height: 40 }), SCREEN.w, SCREEN.h)).toBe(true);
   });
 
+  it('OCR 截断的站点名仍算水印', () => {
+    expect(isSiteWatermarkRegion(region('MPLESCANESP.NE', { x: 60, y: 120, width: 260, height: 32 }), PAGE.w, PAGE.h)).toBe(true);
+    expect(isSiteWatermarkRegion(region('TEMPLESCANESPNET', { x: 60, y: 120, width: 300, height: 32 }), PAGE.w, PAGE.h)).toBe(true);
+  });
+
   it('裸链接、社媒账号与短链一律算水印', () => {
     expect(isSiteWatermarkRegion(region('t.me/somechannel', { x: 100, y: 600, width: 300, height: 30 }), PAGE.w, PAGE.h)).toBe(true);
     expect(isSiteWatermarkRegion(region('加入 telegram 频道', { x: 100, y: 600, width: 240, height: 30 }), PAGE.w, PAGE.h)).toBe(true);

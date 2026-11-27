@@ -21,6 +21,13 @@ const DOMAIN_PATTERN = new RegExp(
   'i',
 );
 
+/**
+ * OCR 截断的站点名：条漫上的「TEMPLESCANESPNET」常被认成「MPLESCANESP.NE」
+ * 这类首尾缺失的残片，域名正则要求完整 TLD 因而漏掉。这里只针对带 SCAN +
+ * ESP/NET 的组合（汉化组站名的常见骨架），不碰正常台词。
+ */
+const TRUNCATED_SITE_PATTERN = /[A-Z]{2,}SCAN[A-Z]{2,}(?:\.[A-Z]{2,3})?/i;
+
 /** 裸链接、社媒主页与短链：出现在画面上几乎只可能是站点推广。 */
 const LINK_PATTERN = /https?:\/\/|www\.|(?:t\.me|discord\.gg|patreon\.com|twitter\.com|instagram\.com|facebook\.com)\//i;
 
@@ -65,6 +72,10 @@ export function isSiteWatermarkRegion(
 
   // 域名 / 链接 / 账号是硬证据，出现在画面上就是水印，不区分位置和气泡。
   if (DOMAIN_PATTERN.test(text)) return true;
+  // 截断站名只在「无句末标点、且短」时命中，避免误伤对白里提到的站名。
+  if (Array.from(text).length <= 28 && !/[。！？?！]$/u.test(text) && TRUNCATED_SITE_PATTERN.test(text)) {
+    return true;
+  }
   if (LINK_PATTERN.test(text)) return true;
   if (HANDLE_PATTERN.test(text)) return true;
 

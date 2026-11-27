@@ -90,3 +90,24 @@ describe('免费通道原样回吐后交给兜底', () => {
     expect(translated?.translationFailed).toBeUndefined();
   });
 });
+
+describe('免费通道回吐短拟声词的本地兜底', () => {
+  it('谷歌原样回吐时用地道中文语气词，不占补翻名额', async () => {
+    const { transport } = createTransport(async (text) => text);
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      regions: regionsOf('¿MMPH?', 'LEH?', 'G:JNDZHSZ'),
+      config: createConfig({ sourceLang: 'es' }),
+    });
+
+    const mmph = result.regions.find((region) => region.sourceText === '¿MMPH?');
+    const leh = result.regions.find((region) => region.sourceText === 'LEH?');
+    const noise = result.regions.find((region) => region.sourceText === 'G:JNDZHSZ');
+    expect(mmph?.translatedText).toBe('唔？');
+    expect(mmph?.translationFailed).toBeUndefined();
+    expect(leh?.translatedText).toBe('欸？');
+    // OCR 噪声翻不了：保留原文、标记失败，不擦除不重排。
+    expect(noise?.translationFailed).toBe(true);
+  });
+});
