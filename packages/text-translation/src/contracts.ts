@@ -58,10 +58,30 @@ export type ChatCompletionTransportRequest = {
   signal?: AbortSignal;
 };
 
+export type PlainTranslationProvider = 'google' | 'bing' | 'mymemory';
+
+/** 免费网页接口：每个引擎独立工作，选中哪个就只走哪个，不自动换引擎。 */
+export type PlainTranslatorKind = 'google_web' | 'bing_web' | 'mymemory_web';
+
+export type TextTranslatorKind = PlainTranslatorKind | 'llm';
+
+export const TEXT_TRANSLATOR_KINDS: readonly TextTranslatorKind[] = [
+  'google_web',
+  'bing_web',
+  'mymemory_web',
+  'llm',
+];
+
+export function isTextTranslatorKind(value: unknown): value is TextTranslatorKind {
+  return typeof value === 'string'
+    && (TEXT_TRANSLATOR_KINDS as readonly string[]).includes(value);
+}
+
 export type PlainTranslationTransportRequest = {
   text: string;
   from: string;
   to: string;
+  provider?: PlainTranslationProvider;
   signal?: AbortSignal;
 };
 
@@ -69,6 +89,7 @@ export type PlainTranslationBatchRequest = {
   texts: readonly string[];
   from: string;
   to: string;
+  provider?: PlainTranslationProvider;
   signal?: AbortSignal;
 };
 
@@ -85,7 +106,7 @@ export interface TextTranslationTransport {
 export type TextTranslationConfig = {
   sourceLang: string;
   targetLang: string;
-  translator: 'google_web' | 'llm';
+  translator: TextTranslatorKind;
   llmProvider: LlmProvider;
   llmAuthMode: LlmAuthMode;
   llmBaseUrl: string;

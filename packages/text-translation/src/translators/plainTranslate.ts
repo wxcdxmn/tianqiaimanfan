@@ -11,6 +11,13 @@ export type PlainTranslateOptions = {
   /** 合并翻译的正文上限，超过则由调用方自行分组。 */
   maxChars?: number;
   signal?: AbortSignal;
+  /**
+   * 指定通道时只走这一条通道，失败就直接报错，不跨通道降级。
+   *
+   * 用户在设置里选了「谷歌翻译」就是要谷歌：谷歌挂了应该让他看到失败，
+   * 而不是悄悄换成 Bing 的译文（语气和断句都不一样，整章风格会跳）。
+   */
+  provider?: PlainTranslateProviderId;
 };
 
 type Provider = {
@@ -160,8 +167,10 @@ function rankProviders(): Provider[] {
 }
 
 /**
- * 逐条/合并翻译的统一入口：Google → Bing → MyMemory 依次降级。
- * Google 429 很常见（同一出口 IP 共享额度），Bing 走的是另一套服务，能顶上来。
+ * 逐条/合并翻译的统一入口。
+ *
+ * 默认按健康度轮换 Google → Bing → MyMemory（限流时自动降级）；一旦
+ * options.provider 指定了通道，就只走那一条，绝不换用别的引擎。
  */
 export async function translatePlainTexts(
   texts: readonly string[],
@@ -175,12 +184,19 @@ export async function translatePlainTexts(
     return texts.map(() => '');
   }
 
+  const pinned = options.provider
+    ? PROVIDERS.filter((provider) => provider.id === options.provider)
+    : null;
+  if (pinned && pinned.length === 0) {
+    throw new Error(`未知的翻译通道: ${String(options.provider)}`);
+  }
+
   const errors: string[] = [];
   let hardWaited = false;
   let sawThrottle = false;
 
   for (;;) {
-    const order = rankProviders();
+    const order = pinned ?? rankProviders();
     for (const provider of order) {
       if (options.signal?.aborted) {
         throw new DOMException('已取消', 'AbortError');
@@ -192,15 +208,27 @@ export async function translatePlainTexts(
         continue;
       }
       if (remaining > 0) {
-        const hasHealthy = order.some(
-          (other) => other.id !== provider.id && cooldownRemaining(other.id) === 0,
-        );
-        if (hasHealthy) {
-          sawThrottle = true;
-          errors.push(`${provider.label} 限流冷却中`);
-          continue;
+        if (pinned) {
+          // 指定引擎时最多等一次冷却：等完还失败就交给上层（限流标记 / LLM 兜底 ），
+          // 不能像多通道那样一轮轮等下去，否则整页会卡在指数退避里。
+          if (hardWaited) {
+            sawThrottle = true;
+            errors.push(`${provider.label} 限流冷却中（约 ${Math.ceil(remaining / 1000)}s）`);
+            continue;
+          }
+          hardWaited = true;
+          await delay(remaining, options.signal);
+        } else {
+          const hasHealthy = order.some(
+            (other) => other.id !== provider.id && cooldownRemaining(other.id) === 0,
+          );
+          if (hasHealthy) {
+            sawThrottle = true;
+            errors.push(`${provider.label} 限流冷却中`);
+            continue;
+          }
+          await delay(remaining, options.signal);
         }
-        await delay(remaining, options.signal);
       }
       try {
         const output = await provider.translate(texts, options);
@@ -220,15 +248,20 @@ export async function translatePlainTexts(
     }
 
     // 所有通道都在限流：等最短的那个冷却结束再来一轮（只等一次，避免拖死整页）。
-    const waits = PROVIDERS.map((provider) => cooldownRemaining(provider.id)).filter((ms) => ms > 0);
+    const waits = order
+      .map((provider) => cooldownRemaining(provider.id))
+      .filter((ms) => ms > 0);
     const shortest = waits.length > 0 ? Math.min(...waits) : 0;
     if (!hardWaited && shortest > 0 && shortest <= PROVIDER_COOLDOWN_HARD_WAIT_MS) {
       hardWaited = true;
       await delay(shortest, options.signal);
       continue;
     }
+    const detail = errors.slice(-4).join('；') || '未知错误';
     const error = new Error(
-      `免费翻译通道全部失败: ${errors.slice(-4).join('；') || '未知错误'}`,
+      pinned
+        ? `${pinned[0]?.label ?? '所选引擎'} 翻译失败: ${detail}`
+        : `免费翻译通道全部失败: ${detail}`,
     ) as Error & { code?: string };
     if (sawThrottle) {
       // 告诉上层「这是限流，不是内容问题」，别再逐条空转重试。
@@ -243,8 +276,9 @@ export function translatePlainText(
   from: string,
   to: string,
   signal?: AbortSignal,
+  provider?: PlainTranslateProviderId,
 ): Promise<string> {
-  return translatePlainTexts([text], { from, to, signal }).then((output) => output[0] ?? '');
+  return translatePlainTexts([text], { from, to, signal, provider }).then((output) => output[0] ?? '');
 }
 
 export function translatePlainBatch(
@@ -252,8 +286,9 @@ export function translatePlainBatch(
   from: string,
   to: string,
   signal?: AbortSignal,
+  provider?: PlainTranslateProviderId,
 ): Promise<string[]> {
-  return translatePlainTexts(texts, { from, to, signal });
+  return translatePlainTexts(texts, { from, to, signal, provider });
 }
 
 export type PlainTranslateDiagnostics = {

@@ -1,4 +1,4 @@
-import { isLlmProvider } from '@shinobu/text-translation';
+import { isLlmProvider, isTextTranslatorKind } from '@shinobu/text-translation';
 import type {
   OcrRunDebugInfo,
   OcrPostFilterDebugInfo,
@@ -483,7 +483,7 @@ function isValidPipelineConfig(value: unknown): value is PipelineConfig {
     'llmModel',
   ];
   if (!stringKeys.every((key) => typeof value[key] === 'string')) return false;
-  if (value.translator !== 'google_web' && value.translator !== 'llm') return false;
+  if (!isTextTranslatorKind(value.translator)) return false;
   if (!isLlmProvider(value.llmProvider)) return false;
   if (value.llmAuthMode !== 'api_key' && value.llmAuthMode !== 'openai_oauth' && value.llmAuthMode !== 'gemini_app') return false;
   if (value.ocrEngine !== 'paddleocr_v6_medium') return false;

@@ -5,6 +5,7 @@ import {
   getDefaultModelPreset,
   isBuiltInProvider,
   isLlmProvider,
+  isTextTranslatorKind,
   llmBuiltInProviderDefinitions,
   llmProviderOptions,
   migrateBuiltInModelPreset,
@@ -179,6 +180,22 @@ export const defaultExtensionSettings: ExtensionSettings = {
 };
 
 export { targetLanguageLabel };
+
+/**
+ * 翻译服务下拉的顺序与文案。
+ *
+ * 免费引擎之间刻意保持「选中哪个就用哪个」：以前是谷歌 → Bing → MyMemory
+ * 自动降级，谷歌一限流就混进 Bing 的译文，同一章语气会跳；现在顺序只影响展示。
+ */
+export const translationServiceOptions: ReadonlyArray<{
+  value: ExtensionSettings['translator'];
+  label: string;
+}> = [
+  { value: 'google_web', label: '谷歌翻译' },
+  { value: 'bing_web', label: '必应翻译' },
+  { value: 'mymemory_web', label: 'MyMemory' },
+  { value: 'llm', label: '大模型' },
+];
 
 export function buildGeminiImagePrompt(
   settings: Pick<ExtensionSettings, 'geminiAppPromptTemplate' | 'targetLang'>,
@@ -367,7 +384,12 @@ export function normalizeSettings(value: unknown): ExtensionSettings {
   const raw = value as Record<string, unknown>;
   const legacyTranslator = raw.translator;
   const legacyGeminiAppEnabled = raw.imageEngine === 'gemini_app' && raw.geminiAppExperimentalEnabled === true;
-  const translator = legacyGeminiAppEnabled || legacyTranslator === 'llm' ? 'llm' : 'google_web';
+  // 读旧配置时别把用户选的引擎抹平：只有认不出的值才退回谷歌。
+  const translator = legacyGeminiAppEnabled
+    ? 'llm'
+    : isTextTranslatorKind(legacyTranslator)
+      ? legacyTranslator
+      : 'google_web';
   const legacyBaseUrl = typeof raw.llmBaseUrl === 'string' ? raw.llmBaseUrl.trim() : '';
   const providerFromBaseUrl = detectBuiltInProviderByBaseUrl(legacyBaseUrl);
   const provider = raw.llmProvider === 'gemini_api'

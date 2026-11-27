@@ -9,9 +9,10 @@ import type {
   LlmProvider,
   LlmThinkingLevel,
   TextTranslator,
+  TextTranslatorKind,
   TranslationReferenceContext,
 } from '@shinobu/text-translation';
-import { isLlmProvider } from '@shinobu/text-translation';
+import { isLlmProvider, isTextTranslatorKind } from '@shinobu/text-translation';
 import type { ModelRuntime } from '@shinobu/model-runtime';
 import type { DiagnosticLogObserver } from '@shinobu/diagnostics';
 import type { PipelineCanvas, PlatformProvider } from './runtime/platform';
@@ -104,7 +105,7 @@ export const PIPELINE_RECORD_SCHEMA_VERSION = 2 as const;
 export type PipelineConfig = {
   sourceLang: string;
   targetLang: string;
-  translator: 'google_web' | 'llm';
+  translator: TextTranslatorKind;
   llmProvider: LlmProvider;
   llmAuthMode: 'api_key' | 'openai_oauth' | 'gemini_app';
   llmBaseUrl: string;
@@ -425,7 +426,7 @@ function validateConfig(config: unknown): config is PipelineConfig {
     'llmModel',
   ];
   return stringKeys.every((key) => typeof config[key] === 'string')
-    && (config.translator === 'google_web' || config.translator === 'llm')
+    && isTextTranslatorKind(config.translator)
     && isLlmProvider(config.llmProvider)
     && (
       config.llmAuthMode === 'api_key'

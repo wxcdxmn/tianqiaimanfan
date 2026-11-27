@@ -16,6 +16,7 @@ import {
   llmBuiltInProviderDefinitions,
   llmProviderOptions,
   optimizedGeminiAppPromptTemplate,
+  translationServiceOptions,
   usesGeminiApiImagePipeline,
   usesGeminiAppImagePipeline,
   usesNanoBananaImagePipeline,
@@ -1089,12 +1090,9 @@ export function App() {
                 <div className="settings-stack">
                   <div className="setting-row">
                     <Label className="field-label">服务</Label>
-                    <SegmentedControl
-                      ariaLabel="服务"
-                      options={[
-                        { value: 'google_web', label: '谷歌翻译' },
-                        { value: 'llm', label: '大模型' },
-                      ]}
+                    <SelectControl
+                      ariaLabel="翻译服务"
+                      options={translationServiceOptions}
                       value={settings.translator}
                       onChange={(value) =>
                         updateTranslator(value as ExtensionSettingsProjection['translator'])

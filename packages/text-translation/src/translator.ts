@@ -1,11 +1,13 @@
 import type { DiagnosticLogObserver } from '@shinobu/diagnostics';
 import { toDiagnosticError } from '@shinobu/diagnostics';
 import type {
+  PlainTranslationProvider,
   TextTranslationConfig,
   TextTranslationRegion,
   TextTranslationResult,
   TextTranslationTransport,
   TextTranslator,
+  TextTranslatorKind,
   TranslationDebugInfo,
 } from './contracts';
 import {
@@ -15,6 +17,29 @@ import {
   llmTranslateRegions,
 } from './translators/llm';
 import { resolveSourceLanguage } from './detectLanguage';
+
+/** 用户选中的引擎 → transport 的通道 id；选一次就只用这一个，不跨引擎降级。 */
+const PLAIN_PROVIDER_BY_TRANSLATOR: Record<Exclude<TextTranslatorKind, 'llm'>, PlainTranslationProvider> = {
+  google_web: 'google',
+  bing_web: 'bing',
+  mymemory_web: 'mymemory',
+};
+
+const PLAIN_ENGINE_LABEL: Record<Exclude<TextTranslatorKind, 'llm'>, string> = {
+  google_web: '谷歌翻译',
+  bing_web: '必应翻译',
+  mymemory_web: 'MyMemory',
+};
+
+function plainProviderFor(translator: TextTranslatorKind | undefined): PlainTranslationProvider | undefined {
+  return translator && translator !== 'llm' ? PLAIN_PROVIDER_BY_TRANSLATOR[translator] : undefined;
+}
+
+function plainEngineLabel(translator: TextTranslatorKind | undefined): string {
+  return translator && translator !== 'llm'
+    ? `免费通道（${PLAIN_ENGINE_LABEL[translator]}）`
+    : '免费通道';
+}
 
 type LlmRegionRequest = {
   id: string;
@@ -374,6 +399,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
   };
 
   const batch = options.transport?.translatePlainBatch;
+  const provider = plainProviderFor(config.translator);
   if (batch && pending.length > 1) {
     for (const group of planPlainBatchGroups(regions, pending)) {
       await throttle(PLAIN_BATCH_GAP_MS);
@@ -382,6 +408,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
           texts: group.map((index) => toBatchLine(regions[index].sourceText)),
           from: config.sourceLang,
           to: config.targetLang,
+          provider,
           signal: options.signal,
         });
         if (output.length !== group.length) {
@@ -437,7 +464,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
         if (options.signal?.aborted) throw error;
         if (isThrottleExhausted(error)) {
           throttleExhausted = true;
-          emitTranslateDiagnostic(config, options, 'warn', '免费翻译通道（Google/Bing/MyMemory）全部限流，剩余对白不再逐条重试', {
+          emitTranslateDiagnostic(config, options, 'warn', `${plainEngineLabel(config.translator)}全部限流，剩余对白不再逐条重试`, {
             attemptedCount,
             failedCount,
             reason: error instanceof Error ? error.message : String(error),
@@ -473,7 +500,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
         return { regions: next, translationDebug: null };
       }
       throw new Error(
-        `文本翻译全部失败（${failedCount} 条）：免费通道（Google/Bing/MyMemory）都被限流或不可达，`
+        `文本翻译全部失败（${failedCount} 条）：${plainEngineLabel(config.translator)}被限流或不可达，`
         + '稍后重试，或在设置里改用 LLM 通道',
       );
     }
@@ -506,7 +533,7 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
       return { regions: next, translationDebug: null };
     }
     throw new Error(
-      `文本翻译全部失败（${failedCount} 条）：免费通道（Google/Bing/MyMemory）都被限流或不可达，`
+      `文本翻译全部失败（${failedCount} 条）：${plainEngineLabel(config.translator)}被限流或不可达，`
       + '稍后重试，或在设置里改用 LLM 通道',
     );
   }
@@ -571,7 +598,7 @@ async function translateOne(
     return '';
   }
 
-  if (config.translator === 'google_web') {
+  if (config.translator !== 'llm') {
     if (!options.transport) {
       throw new Error('未配置文本翻译 transport');
     }
@@ -579,6 +606,7 @@ async function translateOne(
       text,
       from: config.sourceLang,
       to: config.targetLang,
+      provider: plainProviderFor(config.translator),
       signal: options.signal,
     });
   }
