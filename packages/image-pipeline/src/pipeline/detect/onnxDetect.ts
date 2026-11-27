@@ -1185,3 +1185,21 @@ export async function detectByOnnx(
   const result = await detectOnnxFrame(image, platform, modelRuntime, onSubmitted, crop);
   return { ...result, regions: offsetRegions(result.regions, crop.y) };
 }
+
+/**
+ * 气泡引导二次检测的入口：在给定裁剪区域内跑一次文本检测。
+ *
+ * 与 detectByOnnx(crop) 的区别：这里返回的区域坐标保持以 crop 的 x/y 为
+ * 原点、不做任何平移（x/y 两个方向的回平移由调用方统一处理，
+ * 见 bubbleRecheck.mergeRecheckedRegions）。裁剪坐标原点的 mask 画布
+ * 也原样返回，供调用方合成进整页检测掩码。
+ */
+export async function detectByOnnxCrop(
+  image: PipelineImage,
+  platform: PlatformProvider,
+  modelRuntime: ModelRuntime,
+  crop: ImageCrop,
+  onSubmitted?: () => void,
+): Promise<DetectOutput> {
+  return detectOnnxFrame(image, platform, modelRuntime, onSubmitted, crop);
+}

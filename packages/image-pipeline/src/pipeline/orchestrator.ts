@@ -17,6 +17,8 @@ import {
   materializePrecomputedDetection,
   type PrecomputedTextDetection,
 } from './detect/precomputedDetection';
+import { detectByOnnxCrop } from './detect/onnxDetect';
+import { planBubbleRecheckCrops, mergeRecheckedRegions } from './bubbleRecheck';
 import { runOcr } from "./ocr";
 import { isSiteWatermarkRegion } from "./ocr/watermark";
 import { expandOcrRetryBox, isUsableOcrRetry, MAX_OCR_RETRIES } from "./ocr/retry";
@@ -759,6 +761,63 @@ export async function runPipeline(
   } catch (error) {
     logPipelineStage(options.observer, config, "pipeline.bubble", "气泡检测失败", undefined, error);
     throw new PipelineStageError("bubble", "气泡检测", toErrorDetail(error), buildArtifacts(), "runtime", error);
+  }
+
+  // 气泡引导的二次检测：长条图切片检测会把正文缩到 ~0.55×，小字对话经常
+  // 漏检——漏检的文本既不会被翻译（「无法翻译」），也不会被擦除（「原文
+  // 残留」）。气泡是大目标、分割很稳，「有气泡却没配到任何文本区域」基本
+  // 就是漏检的对话：裁剪放大到检测器输入尺寸重扫一遍找回它们。
+  // 任一气泡补检失败只影响那一个气泡，不能拖垮整页。
+  if (detectedBubbles.length > 0) {
+    try {
+      const recheckT0 = performance.now();
+      const recheckPlan = planBubbleRecheckCrops(
+        detectedBubbles,
+        latestRegions,
+        image.naturalWidth,
+        image.naturalHeight,
+      );
+      if (recheckPlan.length > 0) {
+        report(onProgress, "bubble", "气泡内补检文字");
+        let recovered = 0;
+        for (const { bubble, crop } of recheckPlan) {
+          throwIfCancelled(signal);
+          const frame = await detectByOnnxCrop(image, platform, modelRuntime, crop);
+          if (frame.rawMaskCanvas && detectionMaskCanvas) {
+            // 掩码画布是不透明黑底白字;用 lighten(逐通道取 max)合成,
+            // 白色文本像素并入掩码,黑色背景不会抹掉已有检测结果。
+            const maskCtx = detectionMaskCanvas.getContext("2d");
+            if (maskCtx) {
+              maskCtx.save();
+              maskCtx.globalCompositeOperation = "lighten";
+              maskCtx.drawImage(frame.rawMaskCanvas, crop.x, crop.y);
+              maskCtx.restore();
+            }
+          }
+          const added = mergeRecheckedRegions(latestRegions, frame.regions, crop, bubble);
+          if (added.length > 0) {
+            latestRegions.push(...added);
+            recovered += added.length;
+          }
+        }
+        if (recovered > 0) {
+          stageRegions.detected = cloneTextRegions(latestRegions);
+          logPipelineStage(options.observer, config, "pipeline.detect", "气泡内补检出文字", {
+            recoveredRegionCount: recovered,
+            recheckedBubbleCount: recheckPlan.length,
+            durationMs: performance.now() - recheckT0,
+          });
+        }
+        stageTimings.push({
+          stage: "bubble_recheck",
+          label: "气泡内补检文字",
+          durationMs: performance.now() - recheckT0,
+        });
+      }
+    } catch (error) {
+      if ((error as { name?: string } | null)?.name === "AbortError") throw error;
+      console.warn(`[detect] 气泡内补检失败（不影响主流程）: ${toErrorDetail(error)}`);
+    }
   }
 
   throwIfCancelled(signal);
