@@ -249,6 +249,11 @@ async function recoverFailedRegionsWithFreeChain<T extends TextTranslationRegion
   for (let index = 0; index < next.length; index += 1) {
     const region = next[index];
     if (!region.translationFailed || !region.sourceText.trim()) continue;
+    // 只对气泡内对话做跨通道轮换。自由漂浮的文字(拟声词/旁白/水印残迹)
+    // 原样回吐时保留原文,比接受其他通道对噪声的瞎猜更安全——瞎猜出来的
+    // 音译会被擦掉原文嵌进气泡,比不翻更伤观感。
+    // bubbleBox 由管线层富化(气泡归属),契约类型不声明,用结构探测。
+    if (!(region as { bubbleBox?: unknown }).bubbleBox) continue;
     failedCount += 1;
     for (const provider of chain) {
       let translatedText = '';
@@ -469,7 +474,10 @@ async function translateRegionsWithPlainTransport<T extends TextTranslationRegio
     if (failedCount > 0) {
       failedCount -= await recoverFailedRegionsWithFreeChain(next, config, options, chain);
     }
-    if (failedCount >= attemptedCount) {
+    // 整页失败要区分两种情况:全是「原样回吐」说明通道健康、只是这些内容
+    // 翻不了(专名/拟声词)——保留原文正常渲染比报错好;混有真失败(限流/
+    // 断网)才是「通道不可达」,值得报错。
+    if (failedCount >= attemptedCount && untranslatedCount < attemptedCount) {
       throw new Error(
         `文本翻译全部失败（${failedCount} 条）：${plainEngineLabel(config.translator)}等免费通道被限流或不可达，稍后重试`,
       );

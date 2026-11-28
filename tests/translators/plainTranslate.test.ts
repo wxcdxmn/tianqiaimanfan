@@ -41,6 +41,16 @@ function regionsOf(...texts: string[]) {
   }));
 }
 
+/** 气泡内对话区域:跨通道轮换兜底只对这类区域生效。 */
+function dialogueRegionsOf(...texts: string[]) {
+  return texts.map((text, index) => ({
+    id: `r${index}`,
+    sourceText: text,
+    translatedText: '',
+    bubbleBox: { x: 100 + index * 10, y: 200, width: 120, height: 80 },
+  }));
+}
+
 describe('免费翻译通道的健壮性', () => {
   it('按页面实测语言替换错误的 sourceLang', async () => {
     const { transport, calls } = createTransport(async () => '译文');
@@ -183,7 +193,7 @@ describe('免费翻译通道的健壮性', () => {
     const translator = createTextTranslator({ transport });
 
     const result = await translator.translateRegions({
-      regions: regionsOf('A BROKEN english line.', 'Good english line.'),
+      regions: dialogueRegionsOf('A BROKEN english line.', 'Good english line.'),
       config: createConfig(),
     });
 
@@ -209,7 +219,7 @@ describe('免费翻译通道的健壮性', () => {
     const translator = createTextTranslator({ transport });
 
     const result = await translator.translateRegions({
-      regions: regionsOf('¿R-RYU ZION...?', 'WHY DID YOU COME HERE?'),
+      regions: dialogueRegionsOf('¿R-RYU ZION...?', 'WHY DID YOU COME HERE?'),
       config: createConfig(),
     });
 
@@ -219,6 +229,28 @@ describe('免费翻译通道的健壮性', () => {
     ]);
     expect(result.regions.every((region) => !region.translationFailed)).toBe(true);
     expect(llmRequests).toHaveLength(0);
+  });
+
+  it('气泡外文字原样回吐时保留原文，不跨通道瞎猜', async () => {
+    const { transport } = createTransport(async (request) => {
+      if (request.preferredProvider === 'google') {
+        return request.text;
+      }
+      return `译(${request.preferredProvider}):${request.text}`;
+    });
+    transport.requestChatCompletion = async () => {
+      throw new Error('不该走 LLM 通道');
+    };
+    const translator = createTextTranslator({ transport });
+
+    const result = await translator.translateRegions({
+      // 无 bubbleBox 的自由漂浮文字(拟声词/旁白)
+      regions: regionsOf('Chup', 'Ough.'),
+      config: createConfig(),
+    });
+
+    expect(result.regions.map((region) => region.translatedText)).toEqual(['', '']);
+    expect(result.regions.every((region) => region.translationFailed === true)).toBe(true);
   });
 
   it('空文本区域不会发起请求', async () => {

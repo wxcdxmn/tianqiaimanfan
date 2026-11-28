@@ -184,12 +184,16 @@ function rankProviders(): Provider[] {
     .map((entry) => entry.provider);
 }
 
+/** 首选通道冷却不超过这个时长时，等它而不是降级到更差的通道。 */
+export const PREFERRED_WAIT_CAP_MS = 8_000;
+
 /**
  * 逐条/合并翻译的统一入口。
  *
- * 按「首选通道优先、其余按健康度」排序尝试：首选被限流/失败时自动降级到
- * 其余免费通道（冷却中的通道排后面，避免每次请求都先撞一次 429）；全部
- * 通道都不可用时抛错，由上层决定整页失败还是保留原文。
+ * 按「首选通道优先、其余按健康度」排序尝试。首选通道短冷却（≤8s）时等它，
+ * 保住「谷歌主翻」的质量主导地位——降级到必应/MyMemory 的译文风格明显
+ * 不同，整章大规模切换比短暂等待更伤观感；只有首选长时间冷却或硬失败才
+ * 降级。全部通道都不可用时抛错，由上层决定整页失败还是保留原文。
  */
 export async function translatePlainTexts(
   texts: readonly string[],
@@ -214,6 +218,7 @@ export async function translatePlainTexts(
 
   const errors: string[] = [];
   let hardWaited = false;
+  let preferredWaited = false;
   let sawThrottle = false;
 
   for (;;) {
@@ -228,15 +233,24 @@ export async function translatePlainTexts(
         continue;
       }
       if (remaining > 0) {
-        const hasHealthy = order.some(
-          (other) => other.id !== provider.id && cooldownRemaining(other.id) === 0,
-        );
-        if (hasHealthy) {
-          sawThrottle = true;
-          errors.push(`${provider.label} 限流冷却中`);
-          continue;
+        // 首选通道的短冷却值得等：这是「谷歌主翻」和「整章被必应接管」的分界线。
+        const isPreferredShortCooling = preferred?.id === provider.id
+          && !preferredWaited
+          && remaining <= PREFERRED_WAIT_CAP_MS;
+        if (isPreferredShortCooling) {
+          preferredWaited = true;
+          await delay(remaining, options.signal);
+        } else {
+          const hasHealthy = order.some(
+            (other) => other.id !== provider.id && cooldownRemaining(other.id) === 0,
+          );
+          if (hasHealthy) {
+            sawThrottle = true;
+            errors.push(`${provider.label} 限流冷却中`);
+            continue;
+          }
+          await delay(remaining, options.signal);
         }
-        await delay(remaining, options.signal);
       }
       try {
         const output = await provider.translate(texts, options);
